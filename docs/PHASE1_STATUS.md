@@ -1,5 +1,12 @@
 # P1 — Repository Foundation: closure status
 
+> **Update (this snapshot):** `mobile/pubspec.lock`, `mobile/android/` and `mobile/ios/` are now
+> present, with a consistent bundle id (`com.moallem.mobile`) and Flutter 3.50.0 pins. This was
+> checked by inspecting the files only. **Flutter was not run** (not installed here), so
+> analyze/test/build are still unverified, and the table below predates this update. P1 stays
+> NOT CLOSED until a green GitHub Actions run exists. The `com.moallem` prefix is still
+> provisional.
+
 **Status: NOT CLOSED.** Backend foundations exist and the source test suite passes, but the
 mobile lockfile/native projects are not yet present and no GitHub Actions run has demonstrated a
 green end-to-end repository gate.

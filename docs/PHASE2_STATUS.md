@@ -107,3 +107,10 @@
 - `DerivedSubjectMapper`: user_id = UUIDv5(issuer|sub) (مطابق لصيغة uuid في العقد، بلا جدول). لا يمنح صلاحية؛ العضوية ما زالت مطلوبة. **قرار قابل للتراجع:** تغيير issuer يغيّر المعرّفات.
 - **تنبيه Auth0:** عمر access token الافتراضي للـ API هو 86400 ثانية؛ اخفضه في Auth0 ليطابق السقف (مثلاً 900) وإلا سيُرفض كل توكن.
 - التحقق: 90 اختباراً (نطاق + JWKS) عبر shim. لم تُشغَّل: اختبارات config/HTTP وruff/mypy.
+
+## P2-03 — عزل cache / storage / worker (إضافة)
+
+- `domain/tenant_keys.py`: مفاتيح cache ومسارات storage وغلاف رسائل الطابور تُبنى **من `ActiveContext` فقط**؛ المؤسسة جزء من المفتاح بالبناء، والمقاطع تُرفض إن احتوت `/` أو `:` أو `..` أو فراغاً. مفتاح/مسار/رسالة تخص مؤسسة أخرى = `ResourceNotFound` (AT-015).
+- `tests/domain/test_tenant_keys.py`.
+- **ما لا يغطيه:** لا Redis ولا S3 ولا broker فعلي بعد (ADR-020, DEC-030)؛ هذه هي الواجهة التي يجب أن تلتزم بها تلك الطبقات. اختبارات DB (`DB-TEN-01`) تنتظر DEC-031.
+- ربط Moodle بالعضوية والصلاحية: `moodle/service.py` (انظر `PHASE3_STATUS.md`).
