@@ -1,0 +1,1818 @@
+openapi: 3.1.0
+info:
+  title: Moallem AI API
+  version: 0.4.0-draft
+  description: Planning draft v2.4. Membership header, Moodle connection lifecycle,
+    typed transport DTOs, error codes, and sequence-based event cursors have proposed
+    baselines. This remains non-final pending owner approval, identity provider decision,
+    question-domain decision DEC-033, and site-specific Moodle evidence.
+servers:
+- url: https://{host}/api/v1
+  variables:
+    host:
+      default: api.example.invalid
+security:
+- bearerAuth: []
+x-planning-status: READY_FOR_OWNER_REVIEW_NOT_FROZEN
+x-open-contract-gaps:
+- id: ADR-017
+  description: Authentication issuer, subject mapping, refresh rotation, MFA, and
+    session revocation remain unselected.
+- id: DEC-033
+  description: Question type set and full question payload union must be selected
+    by Product/Education before generation/write contract freeze.
+- id: EXT-MDL-001..004
+  description: Site-specific Web Services functions, permissions, role behavior, network
+    reachability and Local Plugin deployment remain unverified.
+- id: DEC-018/020/028/029
+  description: AI provider/model/region, hosting region, storage/KMS and retention/deletion
+    remain open.
+- id: DEC-030
+  description: The transport-independent outbox/inbox semantics are proposed; concrete
+    broker configuration remains open.
+paths:
+  /me:
+    get:
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: Current authenticated principal and authorized memberships
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /moodle/connections:
+    get:
+      operationId: listMoodleConnections
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Authorized Moodle connections for the current membership context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    post:
+      operationId: enrollMoodleConnection
+      description: Enroll a user-specific Moodle External Web Service token. The token
+        is write-only and is persisted only in the secret manager after validation.
+        This does not prove legal domain ownership.
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectionEnrollmentRequest'
+      responses:
+        '201':
+          description: Connection enrolled and validated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionEnrollmentResult'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /courses:
+    get:
+      operationId: listTeacherCourses
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - in: query
+        name: connection_id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Courses visible to the linked Moodle principal
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoursePage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /courses/{course_id}/context:
+    get:
+      operationId: getCourseContext
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - in: path
+        name: course_id
+        required: true
+        schema:
+          type: string
+      - in: query
+        name: connection_id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Authorized course context and source references
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseContext'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /tasks:
+    post:
+      operationId: createTask
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskRequest'
+      responses:
+        '202':
+          description: Task accepted for asynchronous processing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateTaskResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /tasks/{task_id}:
+    get:
+      operationId: getTaskStatus
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Task status and current snapshot metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /tasks/{task_id}/events:
+    get:
+      operationId: listTaskEvents
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/TaskId'
+      - $ref: '#/components/parameters/Cursor'
+      - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Ordered task event timeline page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskEventPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/Gone'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /tasks/{task_id}/snapshot:
+    get:
+      operationId: getCurrentTaskSnapshot
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Current immutable preview snapshot; destination is server-derived
+            and read-only
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskSnapshot'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /tasks/{task_id}/revisions:
+    post:
+      operationId: createTaskRevision
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/TaskId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRevisionRequest'
+      responses:
+        '201':
+          description: New immutable snapshot; previous approvals are no longer valid
+            for the new version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskSnapshot'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /tasks/{task_id}/approvals:
+    post:
+      operationId: decideTaskApproval
+      description: The destination and effective settings are read from the immutable
+        server-side snapshot. The client cannot choose or override the Moodle destination
+        in this request.
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/TaskId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalRequest'
+      responses:
+        '201':
+          description: Approval decision recorded for the exact snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApprovalResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /tasks/{task_id}/cancel:
+    post:
+      operationId: cancelTask
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/TaskId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelTaskRequest'
+      responses:
+        '202':
+          description: Cancellation request accepted if the current transition permits
+            cancellation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskActionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /tasks/{task_id}/result:
+    get:
+      operationId: getTaskResult
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Verified external result; not available as a successful result
+            until verification passes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /moodle/connections/{connection_id}:
+    parameters:
+    - $ref: '#/components/parameters/ConnectionId'
+    get:
+      operationId: getMoodleConnection
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      responses:
+        '200':
+          description: Sanitized connection details; no credential material
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionDetail'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+    delete:
+      operationId: disconnectMoodleConnection
+      description: Disconnects locally and removes the local secret reference. It
+        does not claim to revoke the token remotely in Moodle; the user/site administrator
+        must revoke it in Moodle unless a verified plugin capability exists.
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Local disconnect accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionDisconnectResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /moodle/connections/{connection_id}/validate:
+    parameters:
+    - $ref: '#/components/parameters/ConnectionId'
+    post:
+      operationId: validateMoodleConnectionById
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Validate stored credential and refresh capability snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionValidationResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /moodle/connections/{connection_id}/credential:
+    parameters:
+    - $ref: '#/components/parameters/ConnectionId'
+    put:
+      operationId: rotateMoodleConnectionCredential
+      description: Validate the candidate token for the same Moodle site and user
+        principal before atomically swapping the secret reference. The previous token
+        must be revoked in Moodle separately.
+      parameters:
+      - $ref: '#/components/parameters/ActiveMembership'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CredentialRotationRequest'
+      responses:
+        '200':
+          description: Credential rotated after successful validation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialRotationResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: access-token
+      description: Access-token transport only; issuer, format, refresh, rotation
+        and revocation remain OPEN under ADR-017.
+  parameters:
+    ActiveMembership:
+      name: X-Active-Membership-ID
+      in: header
+      required: true
+      description: Required context selector for tenant-scoped requests (except GET
+        /me). It is not authorization. The server derives principal from bearer authentication
+        and verifies membership ownership, ACTIVE status, tenant, role and resource
+        permissions.
+      x-decision-status: PROPOSED_BASELINE_READY_FOR_APPROVAL
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-generated opaque key with at least 128 bits of cryptographic
+        randomness; scoped by tenant, actor membership, operation code and key hash.
+        Server stores only a keyed HMAC of the key plus canonical request hash; same
+        key with different canonical request hash returns 409.
+      schema:
+        type: string
+        minLength: 22
+        maxLength: 200
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 128
+    TaskId:
+      name: task_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 2048
+      description: Opaque exclusive cursor bound to tenant, active membership/security
+        scope, resource, filter and ordering version. For task events it encodes the
+        last sequence returned and is integrity-protected; server re-authorizes every
+        page.
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+    ConnectionId:
+      name: connection_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    MoodleDestination:
+      type: object
+      additionalProperties: false
+      description: Proposed typed destination; final fields require product and Moodle
+        staging validation.
+      required:
+      - connection_id
+      - course_id
+      properties:
+        connection_id:
+          type: string
+          format: uuid
+        course_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+      x-decision-status: PROPOSED
+    MeResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - user_id
+      - memberships
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        display_name:
+          type: string
+          maxLength: 160
+        memberships:
+          type: array
+          items:
+            $ref: '#/components/schemas/MembershipSummary'
+    ConnectionPage:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - has_more
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectionSummary'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+        has_more:
+          type: boolean
+    ConnectionSummary:
+      type: object
+      additionalProperties: false
+      required:
+      - connection_id
+      - status
+      - remote_revocation_state
+      properties:
+        connection_id:
+          type: string
+          format: uuid
+        display_name:
+          type: string
+          maxLength: 120
+        site_url:
+          type: string
+          format: uri
+        moodle_version:
+          type: string
+        build:
+          type: string
+        moodle_user_ref:
+          type: string
+        status:
+          type: string
+          enum:
+          - PENDING_VALIDATION
+          - ACTIVE
+          - NEEDS_REAUTH
+          - DISABLED
+          - DISCONNECTED
+          - SECURITY_HOLD
+        remote_revocation_state:
+          type: string
+          enum:
+          - NOT_APPLICABLE
+          - NOT_PERFORMED
+          - ADMIN_ACTION_REQUIRED
+          - CONFIRMED_BY_MOODLE
+        last_validated_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        credential_expires_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    ValidateConnectionRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - connection_id
+      properties:
+        connection_id:
+          type: string
+          format: uuid
+    ConnectionValidationResult:
+      type: object
+      additionalProperties: false
+      required:
+      - connection_id
+      - status
+      - checked_at
+      - missing_functions
+      properties:
+        connection_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - VALID
+          - INVALID_CREDENTIAL
+          - INSUFFICIENT_PERMISSIONS
+          - FUNCTIONS_MISSING
+          - UNAVAILABLE
+          - SECURITY_POLICY_REJECTED
+        moodle_version:
+          type: string
+        build:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
+        capability_snapshot_ref:
+          type: string
+          format: uuid
+        missing_functions:
+          type: array
+          items:
+            type: string
+        safe_error_code:
+          type:
+          - string
+          - 'null'
+    CoursePage:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - has_more
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CourseSummary'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+        has_more:
+          type: boolean
+    CourseContext:
+      type: object
+      additionalProperties: false
+      required:
+      - course_id
+      - sections
+      - source_refs
+      properties:
+        course_id:
+          type: string
+        sections:
+          type: array
+          items:
+            $ref: '#/components/schemas/CourseSection'
+        source_refs:
+          type: array
+          items:
+            type: string
+            format: uuid
+        fetched_at:
+          type: string
+          format: date-time
+    CreateTaskRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - task_type
+      - connection_id
+      - course_id
+      - prompt
+      properties:
+        task_type:
+          type: string
+          enum:
+          - CREATE_QUIZ
+        connection_id:
+          type: string
+          format: uuid
+        course_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 10000
+        quiz_spec:
+          $ref: '#/components/schemas/QuizSpec'
+        source_refs:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            format: uuid
+        locale:
+          type: string
+          pattern: ^[a-z]{2,3}(-[A-Z]{2})?$
+        client_metadata:
+          $ref: '#/components/schemas/ClientMetadata'
+    QuizSpec:
+      type: object
+      additionalProperties: false
+      description: Provisional typed request shape. Required fields, limits and supported
+        question types require Product approval before contract freeze.
+      x-decision-status: PROPOSED
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        question_count:
+          type: integer
+          minimum: 1
+          maximum: 100
+        question_types:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            pattern: ^[A-Z][A-Z0-9_]{1,63}$
+          maxItems: 10
+          description: Transport ceiling only; allowed question-type values and discriminated
+            payloads remain subject to DEC-033.
+        duration_seconds:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          maximum: 86400
+        maximum_grade:
+          type:
+          - number
+          - 'null'
+          exclusiveMinimum: 0
+        language:
+          type: string
+          pattern: ^[a-z]{2,3}(-[A-Z]{2})?$
+        instructions:
+          type:
+          - string
+          - 'null'
+          maxLength: 4000
+      required:
+      - name
+      - question_count
+      x-question-types-status: DEC-033_OPEN_PRODUCT_EDUCATION_SELECTION
+    CreateTaskResponse:
+      type: object
+      required:
+      - task_id
+      - task_status
+      - status_url
+      - request_id
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        task_status:
+          type: string
+          enum:
+          - RECEIVED
+        status_url:
+          type: string
+          format: uri-reference
+        events_url:
+          type: string
+          format: uri-reference
+        created_at:
+          type: string
+          format: date-time
+        request_id:
+          type: string
+    TaskStatus:
+      type: object
+      required:
+      - task_id
+      - task_status
+      - updated_at
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        task_status:
+          type: string
+          enum:
+          - RECEIVED
+          - PLANNING
+          - CONTEXT_GATHERING
+          - DRAFTING
+          - VALIDATING
+          - AWAITING_APPROVAL
+          - APPROVED
+          - EXECUTING
+          - VERIFYING
+          - COMPLETED
+          - NEEDS_REVISION
+          - NEEDS_INPUT
+          - NEEDS_RECONCILIATION
+          - REJECTED
+          - FAILED
+          - CANCELLED
+          - EXPIRED
+        current_step:
+          type:
+          - string
+          - 'null'
+        progress:
+          $ref: '#/components/schemas/Progress'
+        awaiting_input:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskInputPrompt'
+        current_snapshot_id:
+          type: string
+          format: uuid
+        current_snapshot_hash:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        external_result:
+          oneOf:
+          - $ref: '#/components/schemas/TaskResult'
+          - type: 'null'
+        error:
+          oneOf:
+          - $ref: '#/components/schemas/ErrorEnvelope'
+          - type: 'null'
+        updated_at:
+          type: string
+          format: date-time
+        cancel_requested:
+          type: boolean
+          default: false
+      description: Task state is authoritative in PostgreSQL; cancel_requested is
+        a separate intent flag and does not mean cancellation is complete.
+    TaskEventPage:
+      type: object
+      additionalProperties: false
+      required:
+      - items
+      - has_more
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TaskEvent'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+        has_more:
+          type: boolean
+        oldest_available_sequence:
+          type: integer
+          minimum: 1
+    TaskEvent:
+      type: object
+      additionalProperties: false
+      required:
+      - event_id
+      - sequence
+      - event_type
+      - occurred_at
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        sequence:
+          type: integer
+          minimum: 1
+        event_type:
+          type: string
+          enum:
+          - TASK_CREATED
+          - STATUS_CHANGED
+          - INPUT_REQUIRED
+          - DRAFT_READY
+          - VALIDATION_COMPLETED
+          - APPROVAL_RECORDED
+          - CANCEL_REQUESTED
+          - EXTERNAL_DISPATCHED
+          - EXTERNAL_OUTCOME_UNKNOWN
+          - RECONCILIATION_UPDATED
+          - TASK_COMPLETED
+          - TASK_FAILED
+        from_status:
+          type:
+          - string
+          - 'null'
+        to_status:
+          type:
+          - string
+          - 'null'
+        message_code:
+          type:
+          - string
+          - 'null'
+        occurred_at:
+          type: string
+          format: date-time
+      description: Append-only event; sequence is strictly increasing per task and
+        is the sole event ordering key.
+    TaskSnapshot:
+      type: object
+      required:
+      - snapshot_id
+      - version_no
+      - snapshot_hash
+      - destination
+      - schema_version
+      properties:
+        snapshot_id:
+          type: string
+          format: uuid
+        version_no:
+          type: integer
+          minimum: 1
+        snapshot_hash:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        destination:
+          allOf:
+          - $ref: '#/components/schemas/MoodleDestination'
+          readOnly: true
+          description: Server-resolved Moodle site and course; immutable within this
+            snapshot.
+        schema_version:
+          type: string
+        quiz_spec:
+          $ref: '#/components/schemas/QuizSpec'
+        content:
+          $ref: '#/components/schemas/QuizDraftPreview'
+    CreateRevisionRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - base_snapshot_id
+      - base_snapshot_hash
+      - changes
+      properties:
+        base_snapshot_id:
+          type: string
+          format: uuid
+        base_snapshot_hash:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        changes:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/RevisionOperation'
+    ApprovalRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - decision
+      - snapshot_id
+      - snapshot_hash
+      properties:
+        decision:
+          type: string
+          enum:
+          - APPROVED
+          - REJECTED
+        snapshot_id:
+          type: string
+          format: uuid
+        snapshot_hash:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        comment:
+          type: string
+          maxLength: 2000
+    ApprovalResult:
+      type: object
+      required:
+      - approval_id
+      - decision
+      - snapshot_id
+      - decided_at
+      properties:
+        approval_id:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum:
+          - APPROVED
+          - REJECTED
+        snapshot_id:
+          type: string
+          format: uuid
+        decided_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+    CancelTaskRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        reason_code:
+          type: string
+    TaskActionResponse:
+      type: object
+      required:
+      - task_id
+      - task_status
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        task_status:
+          type: string
+          enum:
+          - CANCELLED
+          - EXECUTING
+          - NEEDS_RECONCILIATION
+          - COMPLETED
+          - FAILED
+        cancel_request_state:
+          type: string
+          enum:
+          - CANCELLED_BEFORE_DISPATCH
+          - WAITING_FOR_EXTERNAL_OUTCOME
+          - RECONCILIATION_REQUIRED
+          - ALREADY_TERMINAL
+      additionalProperties: false
+    TaskResult:
+      type: object
+      required:
+      - verification_status
+      properties:
+        external_object_type:
+          type: string
+        external_object_id:
+          type: string
+        external_url:
+          type: string
+          format: uri
+        verification_status:
+          type: string
+          enum:
+          - PENDING
+          - VERIFIED
+          - MISMATCH
+          - NOT_FOUND
+          - UNKNOWN
+        verified_at:
+          type: string
+          format: date-time
+        warnings:
+          type: array
+          items:
+            type: string
+    ErrorEnvelope:
+      type: object
+      required:
+      - code
+      - message
+      - request_id
+      - retryable
+      properties:
+        code:
+          type: string
+          enum:
+          - AUTHENTICATION_REQUIRED
+          - MEMBERSHIP_CONTEXT_REQUIRED
+          - MEMBERSHIP_CONTEXT_INVALID
+          - PERMISSION_DENIED
+          - RESOURCE_NOT_FOUND
+          - VALIDATION_FAILED
+          - IDEMPOTENCY_KEY_REUSED
+          - TASK_STATE_CONFLICT
+          - STALE_SNAPSHOT
+          - APPROVAL_EXPIRED
+          - CONNECTION_NOT_ACTIVE
+          - MOODLE_CREDENTIAL_INVALID
+          - MOODLE_FUNCTION_NOT_AVAILABLE
+          - MOODLE_PERMISSION_DENIED
+          - MOODLE_UNAVAILABLE
+          - EXTERNAL_OUTCOME_UNKNOWN
+          - EVENT_CURSOR_EXPIRED
+          - RATE_LIMITED
+          - QUOTA_EXCEEDED
+          - FILE_REJECTED
+          - AI_PROVIDER_UNAVAILABLE
+          - INTERNAL_ERROR
+        message:
+          type: string
+          maxLength: 500
+        details:
+          type: object
+          additionalProperties: false
+          properties:
+            field_errors:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required:
+                - field
+                - code
+                properties:
+                  field:
+                    type: string
+                  code:
+                    type: string
+                  message:
+                    type: string
+            required_permission_code:
+              type:
+              - string
+              - 'null'
+            reset_required:
+              type: boolean
+        request_id:
+          type: string
+        retryable:
+          type: boolean
+        retry_after_seconds:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+      additionalProperties: false
+    MembershipSummary:
+      type: object
+      additionalProperties: false
+      required:
+      - membership_id
+      - tenant_id
+      - status
+      - roles
+      properties:
+        membership_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        organization_name:
+          type: string
+          maxLength: 160
+        roles:
+          type: array
+          items:
+            type: string
+            maxLength: 64
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - INVITED
+          - SUSPENDED
+          - REVOKED
+    ConnectionEnrollmentRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - site_url
+      - webservice_token
+      properties:
+        site_url:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: HTTPS Moodle base URL; no credentials, query or fragment.
+          pattern: ^https://
+        webservice_token:
+          type: string
+          writeOnly: true
+          minLength: 20
+          maxLength: 4096
+          description: Legacy External Web Services token. Never persisted by client
+            or logged.
+        display_name:
+          type: string
+          maxLength: 120
+      x-security-rules:
+      - HTTPS only
+      - Validate DNS and every redirect target; no cross-host redirect
+      - Do not store token before validation
+      - Deny loopback, link-local, multicast, reserved, metadata and arbitrary private-network
+        destinations by default
+      - Private-campus Moodle requires an infrastructure-provisioned Network Connector/egress
+        profile and explicit host/CIDR allowlist; user-supplied URL alone never authorizes
+        it
+      - Pin DNS resolution for the request, defend against DNS rebinding, and apply
+        the same allowlist to every redirect; metadata endpoints are always denied
+      - Do not store token before validation
+    ConnectionEnrollmentResult:
+      type: object
+      additionalProperties: false
+      required:
+      - connection_id
+      - status
+      - moodle_version
+      - moodle_user_ref
+      - checked_at
+      - remote_revocation_state
+      properties:
+        connection_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - PENDING_VALIDATION
+        moodle_version:
+          type: string
+        build:
+          type: string
+        moodle_user_ref:
+          type: string
+        service_code:
+          type: string
+        checked_at:
+          type: string
+          format: date-time
+        remote_revocation_state:
+          type: string
+          enum:
+          - NOT_APPLICABLE
+          - NOT_PERFORMED
+    CredentialRotationRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - webservice_token
+      properties:
+        webservice_token:
+          type: string
+          writeOnly: true
+          minLength: 20
+          maxLength: 4096
+          description: New Moodle External Web Service token. Candidate is validated
+            before secret reference swap.
+    CredentialRotationResult:
+      type: object
+      additionalProperties: false
+      required:
+      - connection_id
+      - status
+      - rotated_at
+      - old_credential_remote_state
+      properties:
+        connection_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - ACTIVE
+          - NEEDS_REAUTH
+        rotated_at:
+          type: string
+          format: date-time
+        old_credential_remote_state:
+          type: string
+          enum:
+          - ADMIN_ACTION_REQUIRED
+          - CONFIRMED_BY_MOODLE
+    ConnectionDisconnectResult:
+      type: object
+      additionalProperties: false
+      required:
+      - connection_id
+      - status
+      - local_credential_state
+      - remote_revocation_state
+      - disconnected_at
+      properties:
+        connection_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+          - DISCONNECTED
+        local_credential_state:
+          type: string
+          enum:
+          - DESTROYED
+          - PENDING_PURGE
+        remote_revocation_state:
+          type: string
+          enum:
+          - ADMIN_ACTION_REQUIRED
+          - CONFIRMED_BY_MOODLE
+        disconnected_at:
+          type: string
+          format: date-time
+        open_tasks_disposition:
+          type: string
+          enum:
+          - CANCELLED_PRE_DISPATCH
+          - RECONCILIATION_REQUIRED
+          - NONE
+    ConnectionDetail:
+      allOf:
+      - $ref: '#/components/schemas/ConnectionSummary'
+    CourseSummary:
+      type: object
+      additionalProperties: false
+      required:
+      - course_id
+      - fullname
+      properties:
+        course_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        fullname:
+          type: string
+          maxLength: 255
+        shortname:
+          type:
+          - string
+          - 'null'
+          maxLength: 100
+        visible:
+          type: boolean
+        start_date:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        end_date:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    CourseModuleSummary:
+      type: object
+      additionalProperties: false
+      required:
+      - module_id
+      - module_type
+      - name
+      properties:
+        module_id:
+          type: string
+        module_type:
+          type: string
+        name:
+          type: string
+        visible:
+          type: boolean
+        url:
+          type:
+          - string
+          - 'null'
+          format: uri
+        source_ref_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+    CourseSection:
+      type: object
+      additionalProperties: false
+      required:
+      - section_id
+      - name
+      - modules
+      properties:
+        section_id:
+          type: string
+        name:
+          type: string
+        visible:
+          type: boolean
+        summary:
+          type:
+          - string
+          - 'null'
+        modules:
+          type: array
+          items:
+            $ref: '#/components/schemas/CourseModuleSummary'
+    ClientMetadata:
+      type: object
+      additionalProperties: false
+      properties:
+        source_channel:
+          type: string
+          enum:
+          - ANDROID
+          - IOS
+          - WEB
+          - UNKNOWN
+        device_locale:
+          type: string
+          maxLength: 32
+        client_version:
+          type: string
+          maxLength: 64
+    Progress:
+      type: object
+      additionalProperties: false
+      required:
+      - stage
+      - basis
+      properties:
+        stage:
+          type: string
+          enum:
+          - QUEUED
+          - PLANNING
+          - CONTEXT
+          - DRAFTING
+          - VALIDATING
+          - APPROVAL
+          - EXECUTION
+          - VERIFICATION
+          - RECONCILIATION
+        percent:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+          maximum: 100
+        basis:
+          type: string
+          enum:
+          - ESTIMATED
+          - DETERMINISTIC
+          - NOT_AVAILABLE
+        updated_at:
+          type: string
+          format: date-time
+    TaskInputPrompt:
+      type: object
+      additionalProperties: false
+      required:
+      - field_code
+      - prompt_code
+      - required
+      properties:
+        field_code:
+          type: string
+        prompt_code:
+          type: string
+        required:
+          type: boolean
+        allowed_values:
+          type: array
+          items:
+            type: string
+        max_length:
+          type: integer
+          minimum: 1
+    AnswerOptionPreview:
+      type: object
+      additionalProperties: false
+      required:
+      - option_id
+      - text
+      properties:
+        option_id:
+          type: string
+        text:
+          type: string
+          maxLength: 4000
+    QuestionDraftPreview:
+      type: object
+      additionalProperties: false
+      required:
+      - question_id
+      - question_type_code
+      - stem
+      - points
+      - source_refs
+      properties:
+        question_id:
+          type: string
+        question_type_code:
+          type: string
+          pattern: ^[A-Z][A-Z0-9_]{1,63}$
+        stem:
+          type: string
+          maxLength: 10000
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnswerOptionPreview'
+        correct_answer_preview:
+          type:
+          - string
+          - 'null'
+          maxLength: 4000
+        rationale:
+          type:
+          - string
+          - 'null'
+          maxLength: 4000
+        points:
+          type: number
+          minimum: 0
+        source_refs:
+          type: array
+          items:
+            type: string
+            format: uuid
+        difficulty:
+          type:
+          - string
+          - 'null'
+          enum:
+          - EASY
+          - MEDIUM
+          - HARD
+          - null
+    QuizDraftPreview:
+      type: object
+      additionalProperties: false
+      required:
+      - title
+      - questions
+      - schema_version
+      properties:
+        title:
+          type: string
+        instructions:
+          type:
+          - string
+          - 'null'
+        questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionDraftPreview'
+        schema_version:
+          type: string
+        total_points:
+          type: number
+          minimum: 0
+    RevisionOperation:
+      type: object
+      additionalProperties: false
+      required:
+      - operation
+      properties:
+        operation:
+          type: string
+          enum:
+          - ADD_QUESTION
+          - UPDATE_QUESTION
+          - REMOVE_QUESTION
+          - UPDATE_QUIZ_SETTINGS
+        question_id:
+          type:
+          - string
+          - 'null'
+        field_code:
+          type:
+          - string
+          - 'null'
+          enum:
+          - STEM
+          - OPTIONS
+          - ANSWER
+          - RATIONALE
+          - POINTS
+          - DIFFICULTY
+          - INSTRUCTIONS
+          - null
+        text_value:
+          type:
+          - string
+          - 'null'
+          maxLength: 10000
+        question_payload_ref:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        position:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+  responses:
+    Unauthorized:
+      description: Authentication required or session invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: Action not permitted in the current tenant/resource context
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Resource not found or not visible under disclosure policy
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Conflict:
+      description: State, idempotency, stale snapshot or concurrency conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ValidationError:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    RateLimited:
+      description: Request or tenant quota exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Gone:
+      description: Cursor expired or no longer retained; caller must reset from authoritative
+        task status.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ServiceUnavailable:
+      description: Temporary upstream or service unavailability. Side-effectful retries
+        remain subject to operation state.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    BadRequest:
+      description: Malformed request or missing/invalid required request context
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InternalServerError:
+      description: Unexpected server error; response includes request_id and is not
+        automatically retryable for side-effectful operations
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+x-planning-decisions:
+  DEC-039: PROPOSED_BASELINE_X_ACTIVE_MEMBERSHIP_ID_REQUIRED_EXCEPT_GET_ME
+  DEC-040: PROPOSED_BASELINE_LEGACY_MOODLE_EXTERNAL_SERVICE_TOKEN
+  DEC-041: PROPOSED_BASELINE_DISTINCT_PUBLISH_OPERATION_STEP_KEYS
+  DEC-042: PROPOSED_BASELINE_CANCEL_REQUEST_SEPARATE_FROM_CANCELLED
+  DEC-043: PROPOSED_BASELINE_RUNTIME_GUARDRAILS_DEFINED_IN_AGENT_RUNTIME_LIMITS
+  DEC-044: PROPOSED_BASELINE_MONOTONIC_TASK_EVENT_SEQUENCE_CURSOR

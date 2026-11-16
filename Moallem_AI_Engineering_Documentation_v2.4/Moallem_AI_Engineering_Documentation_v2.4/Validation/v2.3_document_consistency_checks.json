@@ -1,0 +1,79 @@
+{
+  "validation_report_version": "2.3",
+  "generated_on": "2026-11-15",
+  "purpose": "Planning-document consistency checks only.",
+  "checks": [
+    {
+      "check": "JSON manifests and tool registry parse",
+      "status": "PASS",
+      "observed": "package_manifest.json and tool_registry.draft.json parsed as JSON."
+    },
+    {
+      "check": "OpenAPI YAML parse",
+      "status": "PASS",
+      "observed": "openapi.draft.yaml parsed as YAML; OpenAPI schema conformance was not certified by this parser check."
+    },
+    {
+      "check": "OpenAPI operations and operationId uniqueness",
+      "status": "PASS",
+      "observed": "13 route/method operations; 13 unique non-empty operationIds."
+    },
+    {
+      "check": "OpenAPI internal $ref resolution",
+      "status": "PASS",
+      "observed": "101 internal references inspected; unresolved: []."
+    },
+    {
+      "check": "Active-membership selector coverage",
+      "status": "PASS",
+      "observed": "Every tenant-scoped route except GET /me references X-Active-Membership-ID; mismatches: [].",
+      "caveat": "The selector is PROPOSED only and does not grant authorization; server-side membership and resource checks remain mandatory."
+    },
+    {
+      "check": "Idempotency header on write operations",
+      "status": "PASS",
+      "observed": "5/5 write operations carry Idempotency-Key: ['POST /moodle/connections/validate', 'POST /tasks', 'POST /tasks/{task_id}/revisions', 'POST /tasks/{task_id}/approvals', 'POST /tasks/{task_id}/cancel']."
+    },
+    {
+      "check": "Requirements-to-test catalogue coverage",
+      "status": "PASS",
+      "observed": "31 requirements; 67 catalogue rows; 67 unique IDs; 56 IDs referenced by requirements; missing: [].",
+      "caveat": "Catalogue statuses are proposed/verify/blocker states; none are reported as passed test results."
+    },
+    {
+      "check": "Decision and gap register identity uniqueness",
+      "status": "PASS",
+      "observed": "63 register records; 63 unique IDs."
+    },
+    {
+      "check": "Moodle matrix JSON consistency",
+      "status": "PASS",
+      "observed": "248 records; 239 unique function names; 12 gaps; 237 explicit 3.11 labels; MCAPI-246..248 have 5.3 metadata."
+    },
+    {
+      "check": "Package manifest path integrity and unique additions",
+      "status": "PASS",
+      "observed": "missing paths: []; duplicate addition paths: []; v2.3 current register: Planning/Unified_Decision_and_Blocker_Register_v2.3.md."
+    },
+    {
+      "check": "DOCX/XLSX container integrity",
+      "status": "PASS",
+      "observed": "Checked DOCX/XLSX ZIP containers; corrupt: [].",
+      "caveat": "This verifies package integrity only, not semantic or rendering correctness. DOCX addenda were separately rendered and visually reviewed."
+    }
+  ],
+  "not_performed": [
+    "No backend or Flutter implementation was built or run.",
+    "No Moodle staging connection or live API call was performed.",
+    "No Moodle write operation, compatibility test, load test, security penetration test, backup restore drill, or RPO/RTO exercise was executed.",
+    "No formal OpenAPI 3.1 conformance validator was run; YAML syntax and local $ref resolution were checked.",
+    "No test ID in the catalogue is claimed to have passed; catalogue entries are planning definitions/statuses."
+  ],
+  "document_render_review": [
+    "Second_Pass_Consistency_Audit_v2.3.docx rendered and reviewed across 5 pages.",
+    "02_API_Contract_v2.3_Addendum.docx rendered and reviewed across 2 pages.",
+    "03_04_Reliability_and_Tool_Registry_v2.3_Addendum.docx rendered and reviewed across 2 pages.",
+    "07_Test_Plan_Acceptance_v2.3_Addendum.docx rendered and reviewed across 2 pages."
+  ],
+  "overall_status": "PASS_WITH_SCOPE_LIMITS"
+}

@@ -1,0 +1,90 @@
+{
+  "version": "1.0.0-draft",
+  "status": "PROPOSED_MVP_GUARDRAILS_PENDING_PRODUCT_OPS_FINOPS_APPROVAL",
+  "limits": {
+    "max_wall_clock_seconds_per_task": 900,
+    "max_agent_steps_per_task": 24,
+    "max_tool_calls_per_task": 30,
+    "max_parallel_tool_calls_per_task": 2,
+    "max_parallel_external_writes_per_connection": 1,
+    "max_total_tokens_per_task": 24000,
+    "max_read_or_internal_retries_per_invocation": 2,
+    "max_external_write_retries_after_dispatch": 0,
+    "max_connection_reauth_attempts_per_action": 1,
+    "cost_budget_per_task": {
+      "required": true,
+      "currency": "USD",
+      "amount": null,
+      "behavior_when_unset": "BLOCK_AI_TASK_START",
+      "reservation": {
+        "required_before_task_start": true,
+        "strategy": "atomic_postgresql_budget_reservation",
+        "basis": "configured provider/model pricing and maximum task budget",
+        "settlement": "settle measured usage and release unused reservation",
+        "concurrency_guard": "conditional account update or equivalent serializable ledger transaction",
+        "missing_amount_behavior": "BLOCK_AI_TASK_START"
+      }
+    },
+    "tenant_budget": {
+      "required": true,
+      "period": "billing_cycle",
+      "amount": null,
+      "behavior_when_unset": "BLOCK_AI_TASK_START",
+      "reservation": {
+        "required_before_task_start": true,
+        "strategy": "atomic_postgresql_period_budget_reservation",
+        "period": "billing_cycle",
+        "settlement": "settle measured usage and release unused reservation",
+        "missing_amount_behavior": "BLOCK_AI_TASK_START"
+      }
+    },
+    "per_tool_timeout_ms": {
+      "moodle.discover_capabilities": 15000,
+      "moodle.list_teacher_courses": 15000,
+      "moodle.get_course_contents": 20000,
+      "files.extract_and_index": 120000,
+      "ai.generate_quiz_draft": 90000,
+      "quality.validate_quiz": 30000,
+      "moodle.create_quiz": 15000,
+      "moodle.get_quiz_for_verification": 20000,
+      "moodle.find_quiz_by_operation_key": 15000
+    },
+    "retryable_classes": [
+      "READ_TRANSIENT",
+      "INTERNAL_IDEMPOTENT",
+      "AI_TRANSIENT_BUDGETED"
+    ],
+    "never_retry_after_dispatch": [
+      "EXTERNAL_WRITE_UNKNOWN",
+      "AUTHENTICATION_FAILURE",
+      "PERMISSION_FAILURE",
+      "VALIDATION_FAILURE",
+      "IDEMPOTENCY_CONFLICT"
+    ],
+    "outbox_lease_fencing": {
+      "required": true,
+      "field": "lease_generation_or_fencing_token",
+      "rule": "stale_workers_may_not_commit_after_lease_reclaim"
+    },
+    "max_external_steps_per_publish": 256,
+    "max_external_step_timeout_ms": 30000,
+    "max_parallel_external_steps_per_connection": 1,
+    "tool_call_counting": "max_tool_calls_per_task counts outer registry invocations; internal external_step calls of a durable composite operation are bounded separately by max_external_steps_per_publish.",
+    "composite_external_write_execution": {
+      "mode": "DURABLE_ASYNC_COMMAND",
+      "dispatch_ack_timeout_ms": 15000,
+      "operation_deadline_ms": 900000,
+      "per_step_timeout_ms": 30000,
+      "step_identity": "external_step_key",
+      "max_steps": 256,
+      "parallel_steps_per_connection": 1,
+      "automatic_retry_after_dispatch": false
+    }
+  },
+  "notes": [
+    "Caps are provisional and must be calibrated after staging tests.",
+    "Cost limits are mandatory and deliberately have no invented USD value before provider/model selection.",
+    "The model cannot read or mutate these limits.",
+    "For moodle.create_quiz, the 15,000 ms tool timeout is only the durable-command dispatch acknowledgement window; the accepted command then runs under operation_deadline_ms with per_step_timeout_ms and max_steps."
+  ]
+}

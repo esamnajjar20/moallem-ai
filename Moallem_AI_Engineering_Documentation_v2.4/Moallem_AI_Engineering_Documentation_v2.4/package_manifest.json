@@ -1,0 +1,185 @@
+{
+  "package": "Moallem AI Engineering Documentation Package",
+  "version": "2.4",
+  "date": "2026-11-15",
+  "user_scope": [
+    "teacher"
+  ],
+  "product_scope": "full teacher scope",
+  "execution_mode": "mixed",
+  "mvp": "end-to-end quiz creation on Moodle staging",
+  "status_definitions": {
+    "BASELINED": "مستند إلى قرار/مبدأ واضح في مصادر v1.4؛ لا يعني أنه نُفذ.",
+    "PROPOSED": "تفصيل تنفيذي مقترح لسد فجوة؛ يحتاج اعتماد المسؤول المختص.",
+    "OPEN": "لا تتوافر معلومات كافية لاختيار بديل نهائي.",
+    "BLOCKED": "لا يبدأ هذا الجزء قبل توفير مدخل خارجي أو حسم قرار محدد.",
+    "VERIFY": "يجب إثباته باختبار/سجل من بيئة فعلية قبل إعلان الدعم."
+  },
+  "documents": [
+    "01_Master_PRD_v2.0.docx",
+    "02_API_Contract_Spec_v2.0.docx",
+    "03_Database_Implementation_Spec_v2.0.docx",
+    "04_Agent_Workflow_Tool_Registry_v2.0.docx",
+    "05_Flutter_UIUX_Spec_v2.0.docx",
+    "06_Security_Privacy_Spec_v2.0.docx",
+    "07_Test_Plan_Acceptance_v2.0.docx",
+    "08_Deployment_Operations_Spec_v2.0.docx",
+    "09_Implementation_Roadmap_v2.0.docx"
+  ],
+  "explicit_nonclaims": [
+    "No code implementation asserted",
+    "No Moodle live compatibility asserted",
+    "No production migrations approved",
+    "No hosting or AI provider selected",
+    "No RPO/RTO or SLO measured"
+  ],
+  "contracts": [
+    "Contracts/openapi.draft.yaml",
+    "Contracts/tool_registry.draft.json",
+    "Contracts/agent_runtime_limits.v2.4.json"
+  ],
+  "planning_artifacts": [
+    "Planning/Unified_Decision_and_Blocker_Register_v2.4.md",
+    "Planning/Decision_and_Blocker_Register.md",
+    "Planning/Requirements_Traceability.csv",
+    "Planning/Test_ID_Catalog_v2.4.csv",
+    "Planning/Implementation_Control_v2.4.xlsx",
+    "Planning/Planning_Closure_Decisions_v2.4.docx",
+    "Planning/Second_Pass_Consistency_Audit_v2.3.docx",
+    "Planning/Planning_Review_and_Amendment_v2.2.docx"
+  ],
+  "validation_artifact": [
+    "Validation/Moodle_Staging_Validation_Checklist.md",
+    "Validation/Moodle_Connection_SSRF_and_Network_Egress_v2.4.md",
+    "Validation/v2.4_document_consistency_checks.json",
+    "Validation/v2.3_document_consistency_checks.json"
+  ],
+  "source_baseline": "Original_v1.4/ (40 original files preserved; source README version heading discrepancy documented separately)",
+  "additions": [
+    {
+      "path": "Moodle_Core_API_Extraction/",
+      "description": "Generic Moodle Core Web Services extraction: 248 curated capability records, 239 unique function names and 12 feature gaps; legacy catalogue and Moodle 5.1/5.3/5.3.1 evidence kept distinct."
+    },
+    {
+      "path": "Planning/Planning_Review_and_Amendment_v2.2.docx",
+      "description": "Deep planning review: keep/add/change findings, decision gates and v2.2 amendments; no implementation status is implied."
+    },
+    {
+      "path": "Specifications/07_Test_Plan_Acceptance_v2.2_Addendum.docx",
+      "description": "Proposed additional acceptance scenarios AT-019 through AT-030 for external idempotency, partial writes, concurrency, privacy and offline data."
+    },
+    {
+      "path": "Planning/Second_Pass_Consistency_Audit_v2.3.docx",
+      "description": "Second-pass planning consistency audit, precise source counts, API/tenancy/connection gaps, tool registry requirements and closure gates."
+    },
+    {
+      "path": "Planning/Test_ID_Catalog_v2.3.csv",
+      "description": "Central catalogue of 67 test identifiers referenced by traceability and validation artifacts; none are claimed as executed."
+    },
+    {
+      "path": "Specifications/02_API_Contract_v2.3_Addendum.docx",
+      "description": "Proposed active membership context, Moodle connection lifecycle gaps, DTO and event/error semantics."
+    },
+    {
+      "path": "Specifications/03_04_Reliability_and_Tool_Registry_v2.3_Addendum.docx",
+      "description": "Planning contract for external operation/step identity, outbox/inbox, cancellation and tool registry completeness."
+    },
+    {
+      "path": "Specifications/07_Test_Plan_Acceptance_v2.3_Addendum.docx",
+      "description": "Proposed additional acceptance tests AT-031 through AT-036; not executed."
+    },
+    {
+      "path": "Specifications/V2.3_Amendment_Index.md",
+      "description": "Index of v2.3 amendments and still-open decisions."
+    },
+    {
+      "path": "Validation/Moodle_Connection_SSRF_and_Network_Egress_v2.4.md",
+      "description": "Proposed SSRF and outbound network policy with default deny and pre-provisioned private-campus connector exception."
+    },
+    {
+      "path": "Planning/Implementation_Control_v2.4.xlsx",
+      "description": "Updated planning dashboard with explicit P0 gate approvals/evidence matrix and v2.4 statuses."
+    },
+    {
+      "path": "Contracts/agent_runtime_limits.v2.4.json",
+      "description": "Provisional task, tool, external-step, timeout, atomic budget-reservation and lease-fencing limits."
+    }
+  ],
+  "package_version": "2.4",
+  "updated_date": "2026-11-15",
+  "moodle_reference": "Moodle 5.3 LTS; latest patch checked: 5.3.1 (2026-11-12); reference status counts detailed in Moodle_Core_API_Extraction.",
+  "v2_2_notes": {
+    "status": "Historical v2.2 planning correction snapshot; superseded for current decision tracking by v2.3.",
+    "openapi_operation_count": 13,
+    "traceability_requirement_count": 22,
+    "no_implementation_claim": true,
+    "historical_register_at_v2_2": "Planning/Unified_Decision_and_Blocker_Register_v2.2.md",
+    "superseded_by": "Planning/Unified_Decision_and_Blocker_Register_v2.4.md"
+  },
+  "v2_3_notes": {
+    "status": "Historical second-pass planning consistency snapshot; superseded for current planning decisions by v2.4.",
+    "openapi_operation_count": 13,
+    "requirements_count": 31,
+    "test_catalog_count": 67,
+    "decision_gap_record_count": 63,
+    "moodle_matrix_records": 248,
+    "moodle_matrix_unique_function_names": 239,
+    "moodle_matrix_feature_gaps": 12,
+    "explicit_legacy_3_11_label_count": 237,
+    "separate_historical_5_3_response_update_record": "MCAPI-245",
+    "no_implementation_claim": true,
+    "authoritative_register": "Planning/Unified_Decision_and_Blocker_Register_v2.3.md",
+    "test_id_catalog": "Planning/Test_ID_Catalog_v2.3.csv",
+    "validation_checks": "Validation/v2.3_document_consistency_checks.json",
+    "superseded_by": "v2.4"
+  },
+  "status": "PLANNING_BASELINES_READY_FOR_OWNER_APPROVAL_NOT_IMPLEMENTATION_READY",
+  "latest_amendment_index": "Specifications/V2.4_Amendment_Index.md",
+  "authoritative_register": "Planning/Unified_Decision_and_Blocker_Register_v2.4.md",
+  "key_artifacts": {
+    "planning_closure": "Planning/Planning_Closure_Decisions_v2.4.docx",
+    "implementation_control": "Planning/Implementation_Control_v2.4.xlsx",
+    "api_addendum": "Specifications/02_API_Contract_v2.4_Addendum.docx",
+    "reliability_tool_addendum": "Specifications/03_04_Reliability_and_Tool_Registry_v2.4_Addendum.docx",
+    "openapi": "Contracts/openapi.draft.yaml",
+    "tool_registry": "Contracts/tool_registry.draft.json",
+    "runtime_limits": "Contracts/agent_runtime_limits.v2.4.json",
+    "test_catalog": "Planning/Test_ID_Catalog_v2.4.csv",
+    "ssrf_network_policy": "Validation/Moodle_Connection_SSRF_and_Network_Egress_v2.4.md",
+    "consistency_checks": "Validation/v2.4_document_consistency_checks.json"
+  },
+  "v2_4_notes": {
+    "status": "Planning closure draft for P0-H..P0-L; READY_FOR_APPROVAL is not CLOSED and no implementation is claimed.",
+    "openapi_version": "3.1.0",
+    "openapi_draft_version": "0.4.0-draft",
+    "openapi_operation_count": 17,
+    "requirements_count": 31,
+    "test_catalog_count": 80,
+    "decision_gap_record_count": 63,
+    "tool_count": 9,
+    "all_tool_schemas": "JSON Schema Draft 2020-12; registry executable=false",
+    "runtime_limits": "Proposed numeric guardrails; financial amounts unset and task start blocked until configured",
+    "moodle_matrix_records": 248,
+    "moodle_matrix_unique_function_names": 239,
+    "no_implementation_claim": true,
+    "gates": {
+      "P0-H": "READY_FOR_APPROVAL",
+      "P0-I": "READY_FOR_APPROVAL",
+      "P0-J": "READY_FOR_APPROVAL_WITH_DOMAIN_RESIDUAL",
+      "P0-K": "READY_FOR_APPROVAL",
+      "P0-L": "READY_FOR_APPROVAL"
+    },
+    "authoritative_register": "Planning/Unified_Decision_and_Blocker_Register_v2.4.md",
+    "implementation_control": "Planning/Implementation_Control_v2.4.xlsx",
+    "test_id_catalog": "Planning/Test_ID_Catalog_v2.4.csv",
+    "validation_checks": "Validation/v2.4_document_consistency_checks.json",
+    "composite_moodle_publish": {
+      "execution_model": "DURABLE_ASYNC_COMMAND",
+      "outer_tool_call_budget": 30,
+      "max_external_steps_per_publish": 256,
+      "dispatch_ack_timeout_ms": 15000,
+      "per_external_step_timeout_ms": 30000,
+      "one_external_write_in_flight_per_connection": true
+    }
+  }
+}

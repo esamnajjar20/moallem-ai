@@ -1,0 +1,68 @@
+﻿test_id,domain,scenario,status,source_artifact,required_evidence
+AGENT-BOUNDS-01,Agent Runtime,Agent execution budget and loop guard,PROPOSED,03_04_Reliability_and_Tool_Registry_v2.3_Addendum,Maximum duration/steps/tools/tokens/cost and fail-safe evidence.
+AI-EVAL-01,AI Quality,Golden Dataset evaluation,PROPOSED,21_Educational_AI_Quality,"Versioned cases, model/prompt versions, rubric scores and human review sample."
+API-PARITY-01,API Contract,API route and operationId parity,PROPOSED,02_API_Contract_v2.3_Addendum; openapi.draft.yaml,Automated comparison of route/method/operationId and generated-client contract.
+API-SCHEMA-01,API Contract,Typed DTO and schema completeness,PROPOSED,02_API_Contract_v2.3_Addendum; openapi.draft.yaml,"Schema validation, required/enum/nullability tests and error mapping."
+AT-001,Acceptance,مدرس مخول يقرأ مقرراته.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,قائمة مطابقة لمخرجات Moodle؛ لا بيانات cross-tenant.
+AT-002,Acceptance,طلب إنشاء اختبار بمقرر غير مسموح.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,رفض قبل إنشاء task أو إرجاع خطأ domain واضح حسب السياسة.
+AT-003,Acceptance,POST /tasks يتكرر بنفس Idempotency-Key والpayload.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,يعيد task_id الأصلي ولا ينشئ مهمة أخرى.
+AT-004,Acceptance,نفس المفتاح مع payload مختلف.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,409 IDEMPOTENCY_KEY_REUSED.
+AT-005,Acceptance,محتوى المقرر يحتوي prompt injection.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,لا تغيير في tool allowlist أو policy أو وجهة التنفيذ.
+AT-006,Acceptance,فشل schema validation للمسودة.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,NEEDS_REVISION أو FAILED وفق error classification؛ لا approval/publish.
+AT-007,Acceptance,المدرس يحرر سؤالاً بعد preview.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,snapshot جديد/hash جديد والـapproval السابق غير صالح.
+AT-008,Acceptance,المعلم يرفض snapshot.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,REJECTED؛ لا Moodle write.
+AT-009,Acceptance,انتهاء approval قبل execution.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,منع الكتابة وطلب موافقة جديدة.
+AT-010,Acceptance,سحب capability بين approval وexecution.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,منع الكتابة في preflight.
+AT-011,Acceptance,Moodle write ينجح ثم worker يتوقف قبل تحديث DB.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,recovery/reconciliation يعثر على الأثر ويكمل دون إنشاء duplicate.
+AT-012,Acceptance,Moodle response timeout والنتيجة غير معروفة.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,NEEDS_RECONCILIATION؛ لا retry مباشر.
+AT-013,Acceptance,رسالة queue مكررة.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,Inbox/dedup يمنع تكرار المعالجة/الأثر.
+AT-014,Acceptance,Worker restart في كل مرحلة.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,استئناف من persistent state/checkpoint دون فقد Task.
+AT-015,Acceptance,محاولة قراءة task من tenant آخر.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,403/404 آمن دون كشف وجود resource بحسب سياسة disclosure.
+AT-016,Acceptance,تحقق ما بعد النشر.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,مطابقة object الموجود في Moodle؛ COMPLETED فقط بعد match.
+AT-017,Acceptance,تسريب token في exception.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,redaction قبل log/trace؛ canary غير موجود.
+AT-018,Acceptance,تقييم مجموعة أسئلة عربية.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,human-reviewed rubric results محفوظة مع model/prompt versions.
+AT-019,Acceptance,ينجح Moodle في إنشاء مورد الاختبار لكن يضيع الرد قبل تسجيل external_quiz_ref لدى Moallem.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,تعثر المصالحة على العملية باستخدام external_operation_key؛ لا ينشأ Quiz ثانٍ؛ يسجل دليل المطابقة أو يتحول لتدخل يدوي دون retry.
+AT-020,Acceptance,يتم إنشاء Quiz shell ثم يفشل إنشاء سؤال أو إضافة Slot.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,كل خطوة خارجية لها invocation/status مستقل؛ تستأنف العملية من الخطوة الآمنة أو تعوض وفق قرار معتمد؛ لا تعاد العملية المركبة كاملة عشوائياً.
+AT-021,Acceptance,يحاول المدرس اعتماد Snapshot بالتزامن مع Revision أحدث أو بعد تغيير وجهة/إعداد مؤثر.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,يرفض الخادم الموافقة/التنفيذ على نسخة قديمة باستخدام compare-and-swap أو شرط version/hash ذري؛ لا يحدث write.
+AT-022,Acceptance,إعادة POST revision/approval/cancel بنفس Idempotency-Key ثم بنفس المفتاح مع payload مختلف.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,يعاد القرار/المورد الأصلي عند التطابق؛ 409 IDEMPOTENCY_KEY_REUSED عند اختلاف canonical request hash.
+AT-023,Acceptance,ربط Moodle connection أو إبطالها أو تغيير عضوية tenant أثناء وجود Task مفتوحة.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,لا يعبر الاتصال أو المورد حدود tenant؛ recheck يمنع التنفيذ بعد الإبطال؛ الأثر مسجل ولا يظهر secret.
+AT-024,Acceptance,تظهر دالة في Moodle Core inventory لكنها غير مضافة إلى External Service أو غير مسموحة لحساب teacher.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,لا تُصنف الوظيفة SUPPORTED؛ يظهر سبب capability/service/role المحدد في evidence.
+AT-025,Acceptance,يُرسل طلب approval يحتوي destination مختلفاً عن الوجهة المحفوظة في Snapshot.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,لا يقبل العقد destination من العميل أصلاً؛ تُقرأ الوجهة من snapshot server-side ويعرضها endpoint للمعاينة.
+AT-026,Acceptance,يتعطل AI provider أو region المعتمد ويصبح fallback إلى منطقة/مزود آخر متاحاً.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,لا يحدث fallback خارج السياسة المعتمدة؛ تصنف المهمة وتنتظر أو تفشل برسالة آمنة مع سجل قرار.
+AT-027,Acceptance,يحذف مصدر مقرر أو تنتهي retention policy بينما توجد chunks/embeddings/derived files ونسخ احتياطية.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,تطبق سياسة حذف متسلسلة ومثبتة على المصدر والمشتقات والفهارس والنسخ ضمن مدد معلنة؛ لا يبقى محتوى غير مقصود.
+AT-028,Acceptance,ملف malformed/oversized/polyglot أو يحاول استنزاف CPU/RAM أثناء الاستخراج.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,يبقى في quarantine أو يرفض قبل المعالجة؛ تنتهي المهلة بحدود موارد؛ لا وصول شبكي للمحلل؛ يسجل السبب دون كشف المحتوى.
+AT-029,Acceptance,إعادة الاتصال بعد انقطاع SSE/polling، أو تخطي أحداث بسبب cursor.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,GET status يعيد الحالة الصحيحة؛ events cursor لا يفقد الترتيب/التكافؤ؛ استئناف المهمة لا يعتمد على الاتصال اللحظي.
+AT-030,Acceptance,تغيير user/tenant على الجهاز مع وجود cache أو draft محلي.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,لا تظهر بيانات العضوية السابقة؛ تمسح/تعزل cache حسب سياسة account switch وlogout، ولا تُرفع draft إلى tenant آخر.
+AT-031,Acceptance,المستخدم لديه عضويتان نشطتان في مؤسستين، ويطلب موردًا ضمن العضوية المحددة؛ ثم يحاول إرسال membership ID تخص مستخدم آخر أو عضوية ملغاة.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,يقبل الخادم العضوية التي تخص المستخدم الموثق فقط، ويرفض العضوية الغريبة/الملغاة، ولا يظهر أي مورد أو اتصال من المؤسسة الأخرى.
+AT-032,Acceptance,تنفيذ دورة Moodle connection link/validate/rotate/revoke/disconnect، مع وجود Task مفتوحة عند سحب الاتصال.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,لا يظهر token في العميل أو logs؛ التدوير يبطل الاعتماد السابق؛ الإبطال يمنع أي write جديد؛ وتُعالج المهام المفتوحة وفق سياسة موثقة.
+AT-033,Acceptance,طلب إلغاء قبل dispatch خارجي، ثم طلب آخر بعد بدء/إرسال write إلى Moodle.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,قبل dispatch يمكن إيقاف المهمة؛ بعد dispatch لا تظهر CANCELLED قبل معرفة الأثر، وتنتقل المهمة إلى verification/reconciliation حسب الحالة.
+AT-034,Acceptance,توليد أحداث متزامنة لها timestamp واحد أو أحداث أثناء انقطاع العميل ثم استئنافه باستخدام cursor.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,يستعيد العميل جميع الأحداث بترتيب ثابت دون فقد، مع قبول تكرار آمن عند at-least-once؛ GET task status يظل مصدر الحالة.
+AT-035,Acceptance,إرجاع Tool output غير مطابق للـschema ومحاولة الوكيل تجاوز الحد المعتمد لدورات/أدوات/ميزانية المهمة.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,يرفض output قبل أي أثر؛ يوقف runtime عند الحد ويصدر حالة آمنة؛ لا يستطيع النموذج تغيير سياسة الحدود أو allowlist.
+AT-036,Acceptance,تنفيذ مسار Quiz متعدد الخطوات مع انقطاع بعد إنشاء shell أو question أو slot ثم استعادة المهمة.,PROPOSED,07_Test_Plan_Acceptance_v2.0 + v2.2/v2.3 Addenda,تستخدم هوية publish intent ومفتاحًا ثابتًا لكل خطوة؛ تكتشف المصالحة ما تم؛ ولا تعاد خطوة ناجحة أو العملية المركبة عشوائيًا.
+DB-TEN-01,Database/Tenancy,Cross-tenant persistence isolation,PROPOSED,03_Database_Implementation_Spec,"Tenant isolation evidence for queries, relations and worker context."
+HASH-VECTORS-01,Database/Approval,Canonical snapshot hash vectors,PROPOSED,03_Database_Implementation_Spec,Deterministic canonicalization fixtures and expected SHA-256 outputs.
+MATRIX-AUDIT-01,Moodle API Inventory,Moodle matrix metadata consistency,PROPOSED,Moodle_Core_API_Extraction,"JSON/XLSX counts, release reference and row-ID parity audit."
+MDL-001,Moodle Connection,Connection validation,VERIFY,Implementation_Control_v2.2 → v2.3 Moodle Validation,"HTTPS endpoint, redacted credentials metadata and no-secret logs."
+MDL-002,Moodle Discovery,Capability/service discovery,VERIFY,Implementation_Control_v2.2 → v2.3 Moodle Validation,"Moodle version/build, enabled service, function allowlist and capability snapshot."
+MDL-003,Moodle Read,List teacher courses,VERIFY,Implementation_Control_v2.2 → v2.3 Moodle Validation,"Teacher-owned course list, sanitized request/response and authorization evidence."
+MDL-004,Moodle Read,Get course contents,VERIFY,Implementation_Control_v2.2 → v2.3 Moodle Validation,Visible sections/modules and course-context access evidence.
+MDL-005,Moodle Read/Files,Authorized file discovery/download,VERIFY,Implementation_Control_v2.2 → v2.3 Moodle Validation,"File area, context authorization and sanitized metadata evidence."
+MDL-006,Moodle Write,Create quiz shell/settings,BLOCKED,Implementation_Control_v2.2 → v2.3 Moodle Validation,Verified site-specific operation mapping and read-back.
+MDL-007,Moodle Write,Find/create question category,BLOCKED,Implementation_Control_v2.2 → v2.3 Moodle Validation,"Category lookup/create mapping, permissions and result."
+MDL-008,Moodle Write,Create MVP question type,BLOCKED,Implementation_Control_v2.2 → v2.3 Moodle Validation,"Per-type parameters, returned question reference and verification."
+MDL-009,Moodle Write,Add question/slot to quiz,BLOCKED,Implementation_Control_v2.2 → v2.3 Moodle Validation,Slot relation/order/marks and read-back evidence.
+MDL-010,Moodle Verification,Read quiz for verification,BLOCKED,Implementation_Control_v2.2 → v2.3 Moodle Validation,Settings and question set compared with approved snapshot.
+MDL-011,Moodle Security,Expired/revoked token behavior,VERIFY,Implementation_Control_v2.2 → v2.3 Moodle Validation,"Error class, no secret disclosure and no blind retry."
+MDL-012,Moodle Security,Permission denied/rate-limit behavior,VERIFY,Implementation_Control_v2.2 → v2.3 Moodle Validation,HTTP/domain error classification and rate-limit handling.
+MDL-013,Moodle Reliability,Timeout-after-success reconciliation,BLOCKED,Implementation_Control_v2.2 → v2.3 Moodle Validation,"External operation lookup, duplicate prevention or manual state evidence."
+OPS-01,Operations,Deployment reproducibility and rollback,PROPOSED,08_Deployment_Operations_Spec,"Build provenance, deployment/rollback logs and runbook sign-off."
+OPS-RESTORE-01,Operations/Recovery,Backup restore drill,PROPOSED,08_Deployment_Operations_Spec,"Restore timestamp, validation, measured recovery and approver."
+QUEUE-FAULT-01,Queue/Reliability,Queue failure injection,PROPOSED,08_Deployment_Operations_Spec,"Evidence for duplicate delivery, stale lease, worker crash, poison message and recovery."
+SEC-AUD-01,Security/Audit,Audit log secret-redaction and completeness,PROPOSED,06_Security_Privacy_Spec,Redaction scan and actor/action/resource correlation evidence.
+SEC-E2E-01,Security,End-to-end authorization and membership enforcement,PROPOSED,06_Security_Privacy_Spec,"Authenticated principal, selected membership and resource authorization trace."
+SEC-FILE-01,Security/Files,File quarantine and extraction security,PROPOSED,06_Security_Privacy_Spec,"MIME/signature/size/page limits, quarantine state and timeout evidence."
+SEC-UNIT-01,Security,Authorization and policy unit tests,PROPOSED,06_Security_Privacy_Spec,Positive/negative permission decisions and policy-deny evidence.
+UI-07,Flutter UX,Offline/local draft policy,PROPOSED,05_Flutter_UIUX_Spec,Offline cache and account-switch/clear/logout evidence.
+VER-MDL-002,Moodle Verification,Teacher course discovery verification,VERIFY,Implementation_Control_v2.2 → v2.3 Moodle Validation,"Version/build, role/capability and sanitized course read evidence."
+VER-MDL-007,Moodle Reconciliation,External operation key lookup,BLOCKED,Implementation_Control_v2.2 → v2.3 Moodle Validation,Moodle-side lookup result or explicit manual-only outcome.
+VER-MDL-008,Moodle Reliability,Partial write recovery,BLOCKED,Implementation_Control_v2.2 → v2.3 Moodle Validation,Per-step ledger and no duplicate quiz/question/slot after recovery.

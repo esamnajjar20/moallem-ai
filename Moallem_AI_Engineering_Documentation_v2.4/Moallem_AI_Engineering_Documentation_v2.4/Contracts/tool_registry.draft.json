@@ -1,0 +1,1251 @@
+{
+  "artifact": "Moallem AI Internal Tool Registry",
+  "version": "0.3.0-draft",
+  "planning_version": "v2.4",
+  "status": "PROPOSED_CONTRACT_COMPLETE_SITE_MAPPING_BLOCKED",
+  "executable": false,
+  "schema_dialect": "https://json-schema.org/draft/2020-12/schema",
+  "policy_enforcement": "Deterministic policy engine outside the model; validate input/output JSON Schema and authorization before every invocation.",
+  "runtime_limits_ref": "agent_runtime_limits.v2.4.json",
+  "secret_handling": "Tool inputs contain connection_id only. The Moodle adapter resolves secret_ref from the secret manager; raw secrets never enter tool arguments, outputs, checkpoints, logs or model context.",
+  "tools": [
+    {
+      "tool_code": "moodle.discover_capabilities",
+      "permission_code": "moodle.connection.read",
+      "risk_class": "READ",
+      "timeout_ms": 15000,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "connection_id"
+        ]
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "site_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "moodle_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "build": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "service_enabled": {
+            "type": "boolean"
+          },
+          "allowed_functions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "maxItems": 300
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 160
+            },
+            "maxItems": 300
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "capability_snapshot_ref": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "connection_id",
+          "site_url",
+          "moodle_version",
+          "build",
+          "service_enabled",
+          "allowed_functions",
+          "checked_at",
+          "capability_snapshot_ref"
+        ]
+      },
+      "tool_version": "1.0.0-draft",
+      "schema_version": "1.0.0",
+      "tenant_scope": "Injected by trusted executor from validated X-Active-Membership-ID; never caller-supplied in tool arguments.",
+      "resource_scope": "Validate connection/course/task/file/draft ownership within the resolved tenant before invocation.",
+      "deadline_policy": "Must complete before task deadline; supervisor cancels or marks UNKNOWN safely.",
+      "rate_limit_and_budget": {
+        "max_calls_per_task": 3,
+        "per_connection_external_write_concurrency": null,
+        "tenant_quota": "Configured per tenant; task is blocked if hard quota is not configured."
+      },
+      "retry_policy": {
+        "classification": "READ_TRANSIENT",
+        "max_retries": 2,
+        "backoff": "exponential_with_jitter",
+        "honor_retry_after": true,
+        "unknown_external_outcome": "NEEDS_RECONCILIATION_NO_AUTOMATIC_RETRY"
+      },
+      "idempotency_strategy": "Internal tools use invocation_id + deterministic input hash. External write uses publish_intent_id + external_operation_key + external_step_key; attempt_no does not change identity.",
+      "side_effect_description": "None; stores sanitized capability snapshot internally.",
+      "approval_policy": "No human approval; membership and connection permission required.",
+      "cancellation_policy": "Safe to stop.",
+      "verifier_profile": "Validate site info, Moodle version/build, enabled service and function list.",
+      "audit_fields": [
+        "tenant_id",
+        "actor_membership_id",
+        "task_id",
+        "agent_run_id",
+        "tool_invocation_id",
+        "tool_code",
+        "tool_version",
+        "input_hash",
+        "output_hash",
+        "request_id",
+        "correlation_id",
+        "safe_error_code"
+      ],
+      "evidence_requirements": [
+        "site version/build",
+        "service identifier",
+        "function list hash",
+        "Moodle role/capability evidence"
+      ],
+      "executable": false
+    },
+    {
+      "tool_code": "moodle.list_teacher_courses",
+      "permission_code": "moodle.course.read",
+      "risk_class": "READ",
+      "timeout_ms": 15000,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "connection_id"
+        ]
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "courses": {
+            "type": "array",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "course_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "fullname": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "shortname": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "course_id",
+                "fullname"
+              ]
+            },
+            "maxItems": 100
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "courses",
+          "has_more"
+        ]
+      },
+      "tool_version": "1.0.0-draft",
+      "schema_version": "1.0.0",
+      "tenant_scope": "Injected by trusted executor from validated X-Active-Membership-ID; never caller-supplied in tool arguments.",
+      "resource_scope": "Validate connection/course/task/file/draft ownership within the resolved tenant before invocation.",
+      "deadline_policy": "Must complete before task deadline; supervisor cancels or marks UNKNOWN safely.",
+      "rate_limit_and_budget": {
+        "max_calls_per_task": 5,
+        "per_connection_external_write_concurrency": null,
+        "tenant_quota": "Configured per tenant; task is blocked if hard quota is not configured."
+      },
+      "retry_policy": {
+        "classification": "READ_TRANSIENT",
+        "max_retries": 2,
+        "backoff": "exponential_with_jitter",
+        "honor_retry_after": true,
+        "unknown_external_outcome": "NEEDS_RECONCILIATION_NO_AUTOMATIC_RETRY"
+      },
+      "idempotency_strategy": "Internal tools use invocation_id + deterministic input hash. External write uses publish_intent_id + external_operation_key + external_step_key; attempt_no does not change identity.",
+      "side_effect_description": "None.",
+      "approval_policy": "No; teacher membership and Moodle course capability required.",
+      "cancellation_policy": "Safe to stop.",
+      "verifier_profile": "Every returned course is in the user-scoped Moodle response.",
+      "audit_fields": [
+        "tenant_id",
+        "actor_membership_id",
+        "task_id",
+        "agent_run_id",
+        "tool_invocation_id",
+        "tool_code",
+        "tool_version",
+        "input_hash",
+        "output_hash",
+        "request_id",
+        "correlation_id",
+        "safe_error_code"
+      ],
+      "evidence_requirements": [
+        "sanitized Moodle response hash",
+        "connection/principal reference",
+        "page cursor"
+      ],
+      "executable": false
+    },
+    {
+      "tool_code": "moodle.get_course_contents",
+      "permission_code": "moodle.course.content.read",
+      "risk_class": "READ",
+      "timeout_ms": 20000,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "external_course_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "include_file_metadata": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "connection_id",
+          "external_course_id"
+        ]
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "course_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "section_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "module_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "maxItems": 200
+                }
+              },
+              "required": [
+                "section_id",
+                "name",
+                "module_refs"
+              ]
+            },
+            "maxItems": 100
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 1000
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "course_id",
+          "sections",
+          "source_refs",
+          "fetched_at"
+        ]
+      },
+      "tool_version": "1.0.0-draft",
+      "schema_version": "1.0.0",
+      "tenant_scope": "Injected by trusted executor from validated X-Active-Membership-ID; never caller-supplied in tool arguments.",
+      "resource_scope": "Validate connection/course/task/file/draft ownership within the resolved tenant before invocation.",
+      "deadline_policy": "Must complete before task deadline; supervisor cancels or marks UNKNOWN safely.",
+      "rate_limit_and_budget": {
+        "max_calls_per_task": 8,
+        "per_connection_external_write_concurrency": null,
+        "tenant_quota": "Configured per tenant; task is blocked if hard quota is not configured."
+      },
+      "retry_policy": {
+        "classification": "READ_TRANSIENT",
+        "max_retries": 2,
+        "backoff": "exponential_with_jitter",
+        "honor_retry_after": true,
+        "unknown_external_outcome": "NEEDS_RECONCILIATION_NO_AUTOMATIC_RETRY"
+      },
+      "idempotency_strategy": "Internal tools use invocation_id + deterministic input hash. External write uses publish_intent_id + external_operation_key + external_step_key; attempt_no does not change identity.",
+      "side_effect_description": "May store sanitized source metadata; no Moodle mutation.",
+      "approval_policy": "No; course read capability required.",
+      "cancellation_policy": "Stop between page/module fetches; persist cursor.",
+      "verifier_profile": "Each module/source has course and tenant provenance.",
+      "audit_fields": [
+        "tenant_id",
+        "actor_membership_id",
+        "task_id",
+        "agent_run_id",
+        "tool_invocation_id",
+        "tool_code",
+        "tool_version",
+        "input_hash",
+        "output_hash",
+        "request_id",
+        "correlation_id",
+        "safe_error_code"
+      ],
+      "evidence_requirements": [
+        "course ID",
+        "module/source references",
+        "content hash",
+        "permission response"
+      ],
+      "executable": false
+    },
+    {
+      "tool_code": "files.extract_and_index",
+      "permission_code": "file.extract",
+      "risk_class": "INTERNAL_PROCESSING",
+      "timeout_ms": 120000,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "extraction_profile": {
+            "type": "string",
+            "enum": [
+              "PDF_TEXT",
+              "OFFICE_TEXT",
+              "OCR_ALLOWED",
+              "AUTO_SAFE"
+            ]
+          }
+        },
+        "required": [
+          "file_id",
+          "extraction_profile"
+        ]
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scan_status": {
+            "type": "string",
+            "enum": [
+              "CLEAN",
+              "REJECTED",
+              "QUARANTINED"
+            ]
+          },
+          "chunks_created": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "provenance_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 10000
+          },
+          "extractor_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "file_id",
+          "scan_status",
+          "chunks_created",
+          "provenance_refs",
+          "extractor_version"
+        ]
+      },
+      "tool_version": "1.0.0-draft",
+      "schema_version": "1.0.0",
+      "tenant_scope": "Injected by trusted executor from validated X-Active-Membership-ID; never caller-supplied in tool arguments.",
+      "resource_scope": "Validate connection/course/task/file/draft ownership within the resolved tenant before invocation.",
+      "deadline_policy": "Must complete before task deadline; supervisor cancels or marks UNKNOWN safely.",
+      "rate_limit_and_budget": {
+        "max_calls_per_task": 10,
+        "per_connection_external_write_concurrency": null,
+        "tenant_quota": "Configured per tenant; task is blocked if hard quota is not configured."
+      },
+      "retry_policy": {
+        "classification": "INTERNAL_IDEMPOTENT",
+        "max_retries": 2,
+        "backoff": "exponential_with_jitter",
+        "honor_retry_after": true,
+        "unknown_external_outcome": "NEEDS_RECONCILIATION_NO_AUTOMATIC_RETRY"
+      },
+      "idempotency_strategy": "Internal tools use invocation_id + deterministic input hash. External write uses publish_intent_id + external_operation_key + external_step_key; attempt_no does not change identity.",
+      "side_effect_description": "Creates versioned extracted chunks and provenance in tenant-scoped storage.",
+      "approval_policy": "No external approval; file access/quarantine policy must pass.",
+      "cancellation_policy": "Checkpoint between pages; temporary extraction artifacts are cleaned/expired.",
+      "verifier_profile": "File scan passed, MIME/signature match, page/size/time limits, chunk provenance complete.",
+      "audit_fields": [
+        "tenant_id",
+        "actor_membership_id",
+        "task_id",
+        "agent_run_id",
+        "tool_invocation_id",
+        "tool_code",
+        "tool_version",
+        "input_hash",
+        "output_hash",
+        "request_id",
+        "correlation_id",
+        "safe_error_code"
+      ],
+      "evidence_requirements": [
+        "file hash",
+        "scan verdict",
+        "extractor version",
+        "page/chunk counts"
+      ],
+      "executable": false
+    },
+    {
+      "tool_code": "ai.generate_quiz_draft",
+      "permission_code": "quiz.draft.generate",
+      "risk_class": "AI_GENERATION",
+      "timeout_ms": 90000,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_context_ref": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quiz_spec_ref": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rubric_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "task_id",
+          "source_context_ref",
+          "quiz_spec_ref",
+          "rubric_version"
+        ]
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "draft_ref": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "schema_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "question_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 1000
+          },
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "provider_code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "model_code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "cost_amount": {
+            "type": "number",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          }
+        },
+        "required": [
+          "draft_ref",
+          "schema_version",
+          "question_count",
+          "source_refs",
+          "input_tokens",
+          "output_tokens",
+          "provider_code",
+          "model_code",
+          "cost_amount",
+          "currency"
+        ]
+      },
+      "tool_version": "1.0.0-draft",
+      "schema_version": "1.0.0",
+      "tenant_scope": "Injected by trusted executor from validated X-Active-Membership-ID; never caller-supplied in tool arguments.",
+      "resource_scope": "Validate connection/course/task/file/draft ownership within the resolved tenant before invocation.",
+      "deadline_policy": "Must complete before task deadline; supervisor cancels or marks UNKNOWN safely.",
+      "rate_limit_and_budget": {
+        "max_calls_per_task": 2,
+        "per_connection_external_write_concurrency": null,
+        "tenant_quota": "Configured per tenant; task is blocked if hard quota is not configured."
+      },
+      "retry_policy": {
+        "classification": "AI_TRANSIENT_BUDGETED",
+        "max_retries": 2,
+        "backoff": "exponential_with_jitter",
+        "honor_retry_after": true,
+        "unknown_external_outcome": "NEEDS_RECONCILIATION_NO_AUTOMATIC_RETRY"
+      },
+      "idempotency_strategy": "Internal tools use invocation_id + deterministic input hash. External write uses publish_intent_id + external_operation_key + external_step_key; attempt_no does not change identity.",
+      "side_effect_description": "Creates immutable draft revision and provider usage ledger entry.",
+      "approval_policy": "No external write approval; runs only inside task budget and allowed source context.",
+      "cancellation_policy": "Cancel at provider boundary if supported; otherwise discard late result and retain audit/usage.",
+      "verifier_profile": "Draft matches QuizSpec version; source refs resolve to approved tenant/course context.",
+      "audit_fields": [
+        "tenant_id",
+        "actor_membership_id",
+        "task_id",
+        "agent_run_id",
+        "tool_invocation_id",
+        "tool_code",
+        "tool_version",
+        "input_hash",
+        "output_hash",
+        "request_id",
+        "correlation_id",
+        "safe_error_code"
+      ],
+      "evidence_requirements": [
+        "provider/model/version",
+        "prompt version",
+        "token counts",
+        "cost ledger",
+        "source refs"
+      ],
+      "executable": false
+    },
+    {
+      "tool_code": "quality.validate_quiz",
+      "permission_code": "quiz.draft.validate",
+      "risk_class": "INTERNAL_VALIDATION",
+      "timeout_ms": 30000,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "draft_ref": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rubric_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 1000
+          }
+        },
+        "required": [
+          "draft_ref",
+          "rubric_version",
+          "source_refs"
+        ]
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "validation_ref": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "PASS_WITH_WARNINGS",
+              "BLOCKED"
+            ]
+          },
+          "hard_failures": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "maxItems": 200
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "maxItems": 500
+          },
+          "validated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "validation_ref",
+          "decision",
+          "hard_failures",
+          "warnings",
+          "validated_at"
+        ]
+      },
+      "tool_version": "1.0.0-draft",
+      "schema_version": "1.0.0",
+      "tenant_scope": "Injected by trusted executor from validated X-Active-Membership-ID; never caller-supplied in tool arguments.",
+      "resource_scope": "Validate connection/course/task/file/draft ownership within the resolved tenant before invocation.",
+      "deadline_policy": "Must complete before task deadline; supervisor cancels or marks UNKNOWN safely.",
+      "rate_limit_and_budget": {
+        "max_calls_per_task": 4,
+        "per_connection_external_write_concurrency": null,
+        "tenant_quota": "Configured per tenant; task is blocked if hard quota is not configured."
+      },
+      "retry_policy": {
+        "classification": "INTERNAL_IDEMPOTENT",
+        "max_retries": 2,
+        "backoff": "exponential_with_jitter",
+        "honor_retry_after": true,
+        "unknown_external_outcome": "NEEDS_RECONCILIATION_NO_AUTOMATIC_RETRY"
+      },
+      "idempotency_strategy": "Internal tools use invocation_id + deterministic input hash. External write uses publish_intent_id + external_operation_key + external_step_key; attempt_no does not change identity.",
+      "side_effect_description": "Stores validation result and warnings; does not publish.",
+      "approval_policy": "No; deterministic validation plus configured education rubric.",
+      "cancellation_policy": "Safe to stop; validation can restart from immutable draft/rubric versions.",
+      "verifier_profile": "All hard blockers pass; warning and unsupported-source cases remain visible to teacher.",
+      "audit_fields": [
+        "tenant_id",
+        "actor_membership_id",
+        "task_id",
+        "agent_run_id",
+        "tool_invocation_id",
+        "tool_code",
+        "tool_version",
+        "input_hash",
+        "output_hash",
+        "request_id",
+        "correlation_id",
+        "safe_error_code"
+      ],
+      "evidence_requirements": [
+        "draft hash",
+        "rubric version",
+        "validator version",
+        "rule outcomes",
+        "human review state"
+      ],
+      "executable": false
+    },
+    {
+      "tool_code": "moodle.create_quiz",
+      "permission_code": "moodle.quiz.create",
+      "risk_class": "EXTERNAL_WRITE",
+      "timeout_ms": 15000,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "snapshot_hash": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "publish_intent_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "external_operation_key": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 128
+          },
+          "external_step_keys": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "connection_id",
+          "snapshot_id",
+          "snapshot_hash",
+          "publish_intent_id",
+          "external_operation_key",
+          "external_step_keys"
+        ]
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_state": {
+            "type": "string",
+            "enum": [
+              "PREPARED",
+              "DISPATCHED",
+              "SUCCEEDED",
+              "FAILED_FINAL",
+              "UNKNOWN",
+              "NEEDS_RECONCILIATION"
+            ]
+          },
+          "external_quiz_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step_results": {
+            "type": "array",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "external_step_key": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "PREPARED",
+                    "DISPATCHED",
+                    "SUCCEEDED",
+                    "FAILED_FINAL",
+                    "UNKNOWN",
+                    "RECONCILED_PRESENT",
+                    "RECONCILED_ABSENT"
+                  ]
+                },
+                "external_ref": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "error_code": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "external_step_key",
+                "state"
+              ]
+            },
+            "maxItems": 256
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation_state",
+          "step_results",
+          "replayed"
+        ]
+      },
+      "tool_version": "1.0.0-draft",
+      "schema_version": "1.0.0",
+      "tenant_scope": "Injected by trusted executor from validated X-Active-Membership-ID; never caller-supplied in tool arguments.",
+      "resource_scope": "Validate connection/course/task/file/draft ownership within the resolved tenant before invocation.",
+      "deadline_policy": "Persist publish intent and step plan, return after durable acceptance within dispatch_ack_timeout_ms; a durable worker executes each external step under per_external_step_timeout_ms and the task overall deadline. Exceeding the deadline stops future dispatch and reconciles any dispatched unknown step.",
+      "rate_limit_and_budget": {
+        "max_calls_per_task": 1,
+        "per_connection_external_write_concurrency": 1,
+        "tenant_quota": "Configured per tenant; task is blocked if hard quota is not configured.",
+        "max_external_steps_per_publish": 256,
+        "per_external_step_timeout_ms": 30000
+      },
+      "retry_policy": {
+        "classification": "NO_AUTOMATIC_RETRY_AFTER_DISPATCH",
+        "max_retries": 0,
+        "backoff": "exponential_with_jitter",
+        "honor_retry_after": true,
+        "unknown_external_outcome": "NEEDS_RECONCILIATION_NO_AUTOMATIC_RETRY"
+      },
+      "idempotency_strategy": "Internal tools use invocation_id + deterministic input hash. External write uses publish_intent_id + external_operation_key + external_step_key; attempt_no does not change identity.",
+      "side_effect_description": "Creates Quiz shell and, through durable sub-steps, categories/questions/slots in Moodle.",
+      "approval_policy": "Required: exact immutable snapshot hash + unexpired approval + fresh permission/capability preflight.",
+      "cancellation_policy": "Before dispatch stop; after dispatch reconcile; no false CANCELLED.",
+      "verifier_profile": "Independent read-back compares course, settings, questions, slot ordering and marks to approved snapshot.",
+      "audit_fields": [
+        "tenant_id",
+        "actor_membership_id",
+        "task_id",
+        "agent_run_id",
+        "tool_invocation_id",
+        "tool_code",
+        "tool_version",
+        "input_hash",
+        "output_hash",
+        "request_id",
+        "correlation_id",
+        "safe_error_code"
+      ],
+      "evidence_requirements": [
+        "publish_intent_id",
+        "external_operation_key",
+        "external_step_key",
+        "Moodle version/build/function mapping",
+        "approval ref",
+        "read-back evidence"
+      ],
+      "executable": false,
+      "execution_model": "DURABLE_ASYNC_COMMAND",
+      "dispatch_ack_timeout_ms": 15000,
+      "operation_deadline_ms": 900000,
+      "per_external_step_timeout_ms": 30000
+    },
+    {
+      "tool_code": "moodle.get_quiz_for_verification",
+      "permission_code": "moodle.quiz.verify",
+      "risk_class": "READ_VERIFY",
+      "timeout_ms": 20000,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "external_quiz_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "external_operation_key": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 128
+          },
+          "expected_snapshot_ref": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "connection_id",
+          "external_operation_key",
+          "expected_snapshot_ref"
+        ]
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "verification_status": {
+            "type": "string",
+            "enum": [
+              "VERIFIED",
+              "MISMATCH",
+              "NOT_FOUND",
+              "UNKNOWN"
+            ]
+          },
+          "external_quiz_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "observed_snapshot_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mismatch_codes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            },
+            "maxItems": 100
+          },
+          "verified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "verification_status",
+          "mismatch_codes"
+        ]
+      },
+      "tool_version": "1.0.0-draft",
+      "schema_version": "1.0.0",
+      "tenant_scope": "Injected by trusted executor from validated X-Active-Membership-ID; never caller-supplied in tool arguments.",
+      "resource_scope": "Validate connection/course/task/file/draft ownership within the resolved tenant before invocation.",
+      "deadline_policy": "Must complete before task deadline; supervisor cancels or marks UNKNOWN safely.",
+      "rate_limit_and_budget": {
+        "max_calls_per_task": 5,
+        "per_connection_external_write_concurrency": null,
+        "tenant_quota": "Configured per tenant; task is blocked if hard quota is not configured."
+      },
+      "retry_policy": {
+        "classification": "READ_TRANSIENT",
+        "max_retries": 2,
+        "backoff": "exponential_with_jitter",
+        "honor_retry_after": true,
+        "unknown_external_outcome": "NEEDS_RECONCILIATION_NO_AUTOMATIC_RETRY"
+      },
+      "idempotency_strategy": "Internal tools use invocation_id + deterministic input hash. External write uses publish_intent_id + external_operation_key + external_step_key; attempt_no does not change identity.",
+      "side_effect_description": "None; produces verification evidence.",
+      "approval_policy": "No extra approval; only for same approved task/connection.",
+      "cancellation_policy": "Safe to stop and retry read within budget.",
+      "verifier_profile": "Return observed fields and explicit match status; never infer VERIFIED from HTTP 200.",
+      "audit_fields": [
+        "tenant_id",
+        "actor_membership_id",
+        "task_id",
+        "agent_run_id",
+        "tool_invocation_id",
+        "tool_code",
+        "tool_version",
+        "input_hash",
+        "output_hash",
+        "request_id",
+        "correlation_id",
+        "safe_error_code"
+      ],
+      "evidence_requirements": [
+        "external object ref",
+        "observed settings",
+        "question/slot refs",
+        "comparison report"
+      ],
+      "executable": false
+    },
+    {
+      "tool_code": "moodle.find_quiz_by_operation_key",
+      "permission_code": "moodle.quiz.reconcile",
+      "risk_class": "READ_RECONCILIATION",
+      "timeout_ms": 15000,
+      "input": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "external_operation_key": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 128
+          },
+          "course_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "publish_intent_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "connection_id",
+          "external_operation_key",
+          "course_id",
+          "publish_intent_id"
+        ]
+      },
+      "output": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "lookup_state": {
+            "type": "string",
+            "enum": [
+              "FOUND_ONE",
+              "FOUND_MULTIPLE",
+              "PROVEN_ABSENT",
+              "UNSUPPORTED",
+              "UNKNOWN"
+            ]
+          },
+          "matches": {
+            "type": "array",
+            "items": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "external_object_type": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "external_object_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 255
+                },
+                "external_step_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "external_object_type",
+                "external_object_id"
+              ]
+            },
+            "maxItems": 50
+          },
+          "evidence_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "lookup_implementation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "lookup_state",
+          "matches",
+          "lookup_implementation"
+        ]
+      },
+      "tool_version": "1.0.0-draft",
+      "schema_version": "1.0.0",
+      "tenant_scope": "Injected by trusted executor from validated X-Active-Membership-ID; never caller-supplied in tool arguments.",
+      "resource_scope": "Validate connection/course/task/file/draft ownership within the resolved tenant before invocation.",
+      "deadline_policy": "Must complete before task deadline; supervisor cancels or marks UNKNOWN safely.",
+      "rate_limit_and_budget": {
+        "max_calls_per_task": 5,
+        "per_connection_external_write_concurrency": null,
+        "tenant_quota": "Configured per tenant; task is blocked if hard quota is not configured."
+      },
+      "retry_policy": {
+        "classification": "READ_TRANSIENT",
+        "max_retries": 2,
+        "backoff": "exponential_with_jitter",
+        "honor_retry_after": true,
+        "unknown_external_outcome": "NEEDS_RECONCILIATION_NO_AUTOMATIC_RETRY"
+      },
+      "idempotency_strategy": "Internal tools use invocation_id + deterministic input hash. External write uses publish_intent_id + external_operation_key + external_step_key; attempt_no does not change identity.",
+      "side_effect_description": "None; reconciliation evidence only.",
+      "approval_policy": "No new approval for lookup; result is constrained to original connection/course/operation scope.",
+      "cancellation_policy": "Safe to stop; state remains UNKNOWN/NEEDS_RECONCILIATION.",
+      "verifier_profile": "Only a trusted Moodle-side operation-key mapping can return authoritative match/absence; heuristics never prove absence.",
+      "audit_fields": [
+        "tenant_id",
+        "actor_membership_id",
+        "task_id",
+        "agent_run_id",
+        "tool_invocation_id",
+        "tool_code",
+        "tool_version",
+        "input_hash",
+        "output_hash",
+        "request_id",
+        "correlation_id",
+        "safe_error_code"
+      ],
+      "evidence_requirements": [
+        "operation key",
+        "site/connection ID",
+        "matches",
+        "plugin/version or lookup implementation",
+        "confidence/evidence"
+      ],
+      "executable": false
+    }
+  ],
+  "global_rules": [
+    "Fail closed when a required schema, permission code, tenant/resource scope or policy field is missing.",
+    "No arbitrary HTTP, SQL, shell, Python or direct Moodle calls from the model.",
+    "Validate each tool output before the next agent node or any external effect.",
+    "All external writes require immutable snapshot hash, current approval, permission/capability preflight and durable step identity.",
+    "Unknown write outcomes are never automatically replayed unless trusted lookup proves absence.",
+    "Validate format keywords (uuid, uri, date-time and other declared formats) with a configured JSON Schema FormatChecker; schema compilation alone is insufficient.",
+    "Reserve per-task and tenant-period AI cost ceilings atomically in PostgreSQL before execution; settle actual usage and release unused reservations.",
+    "For durable composite Moodle writes, max_tool_calls counts the outer registry command; external_step_count is a separate bounded counter (max 256 per publish) and each step has its own timeout, state and immutable key."
+  ]
+}

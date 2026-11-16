@@ -1,0 +1,142 @@
+{
+  "artifact": "Moallem AI v2.4 document consistency checks",
+  "checked_at": "2026-11-15",
+  "status": "PASS_WITH_SCOPE_LIMITS",
+  "passed_checks": 23,
+  "failed_checks": 0,
+  "checks": [
+    {
+      "check": "OpenAPI YAML/version",
+      "status": "PASS",
+      "detail": "Parsed YAML; version=3.1.0"
+    },
+    {
+      "check": "OpenAPI operations/IDs",
+      "status": "PASS",
+      "detail": "17 operations; 17 unique operationIds"
+    },
+    {
+      "check": "OpenAPI local references",
+      "status": "PASS",
+      "detail": "55 local component references; unresolved=[]"
+    },
+    {
+      "check": "OpenAPI inherited/path/security parameters",
+      "status": "PASS",
+      "detail": "Checks path-level + operation-level params; issues=[]"
+    },
+    {
+      "check": "OpenAPI error coverage",
+      "status": "PASS",
+      "detail": "All tenant routes: 400/403/429/500; GET /me: 401/429/500; issues=[]"
+    },
+    {
+      "check": "OpenAPI component JSON Schemas",
+      "status": "PASS",
+      "detail": "39 schemas pass Draft 2020-12 meta-schema check"
+    },
+    {
+      "check": "Moodle connection lifecycle endpoints",
+      "status": "PASS",
+      "detail": "6 required enrollment/list/detail/disconnect/validate/rotate operations; missing=[]"
+    },
+    {
+      "check": "Idempotency key entropy contract",
+      "status": "PASS",
+      "detail": "minLength=22; client-side cryptographic entropy requirement documented"
+    },
+    {
+      "check": "Tool registry schemas/policy metadata",
+      "status": "PASS",
+      "detail": "9 tools, 18 input/output schemas, unique tool codes; executable=false; issues=[]"
+    },
+    {
+      "check": "Registry/runtime timeout parity",
+      "status": "PASS",
+      "detail": "Every tool timeout matches central runtime limits; create_quiz 15s dispatch acknowledgement is distinct from 30s internal step timeout"
+    },
+    {
+      "check": "AI budget reservation guard",
+      "status": "PASS",
+      "detail": "Per-task and tenant-period budgets required; atomic PostgreSQL reservation; missing caps block task start"
+    },
+    {
+      "check": "Composite Moodle publish boundaries",
+      "status": "PASS",
+      "detail": "30 outer tool calls; 256 separate durable external steps; 15s dispatch ack; 900s deadline; 30s per step; serial connection writes; no blind retry"
+    },
+    {
+      "check": "Requirements traceability links",
+      "status": "PASS",
+      "detail": "31 unique requirements; unresolved Test IDs=[]"
+    },
+    {
+      "check": "Central test catalog",
+      "status": "PASS",
+      "detail": "80 unique test IDs; not marked as executed results"
+    },
+    {
+      "check": "Unified register identifiers",
+      "status": "PASS",
+      "detail": "63 unique register IDs; duplicates=[]"
+    },
+    {
+      "check": "Implementation control workbook integrity",
+      "status": "PASS",
+      "detail": "XLSX ZIP structure and CRC valid; seven sheets including P0 Gate Closure checked via artifact_tool"
+    },
+    {
+      "check": "Moodle API matrix reconciliation",
+      "status": "PASS",
+      "detail": "248 records, 239 unique names, 237 explicitly tagged as historical 3.11 references; matrix remains unverified for target site"
+    },
+    {
+      "check": "Manifest references",
+      "status": "PASS",
+      "detail": "25 listed paths; missing=[]"
+    },
+    {
+      "check": "v2.4 register status reconciliation",
+      "status": "PASS",
+      "detail": "Expected current statuses verified for 9 legacy decisions/gaps; actual={'DEC-035': 'PROPOSED', 'DEC-036': 'PROPOSED', 'DEC-037': 'PROPOSED', 'GAP-TEST-001': 'PARTIALLY-CORRECTED', 'GAP-TEST-002': 'CORRECTED-IN-DRAFT', 'GAP-AGENT-001': 'PARTIALLY-CORRECTED', 'GAP-AGENT-002': 'PARTIALLY-CORRECTED', 'GAP-OPS-001': 'PARTIALLY-CORRECTED', 'GAP-API-002': 'PARTIALLY-CORRECTED'}"
+    },
+    {
+      "check": "Office file container integrity",
+      "status": "PASS",
+      "detail": "5 DOCX/XLSX containers pass CRC; corrupt=[]"
+    },
+    {
+      "check": "DOCX rendering and pagination",
+      "status": "PASS",
+      "detail": "Final rendered pages {'Planning_Closure_Decisions_v2.4.docx': 7, '02_API_Contract_v2.4_Addendum.docx': 2, '03_04_Reliability_and_Tool_Registry_v2.4_Addendum.docx': 3}; no split tables/orphaned final link page in closure document"
+    },
+    {
+      "check": "Planning-only status clarity",
+      "status": "PASS",
+      "detail": "No implementation, owner approval, live Moodle verification or test execution is claimed"
+    },
+    {
+      "check": "Full Markdown/Excel decision status parity",
+      "status": "PASS",
+      "detail": "63 Markdown register IDs and 63 Excel Decision Register IDs; all status values match exactly. Reconciled with artifact_tool inspection of the final v2.4 workbook."
+    }
+  ],
+  "scope_limits": [
+    "Checks cover planning artefacts, schema meta-validation, local OpenAPI reference/path parameter structure, traceability, workbook/register reconciliation and file integrity only.",
+    "The OpenAPI specification was not certified by a full OpenAPI 3.1 validator; no such validator was installed. The checks do not establish complete conformance.",
+    "No backend or Flutter application code was executed or tested.",
+    "No live Moodle staging connection, token validation, quiz creation, question creation, external operation lookup, or reconciliation test was performed.",
+    "No penetration test, load test, disaster recovery drill, restore test, or cost measurement was performed.",
+    "No Product, Security, Integration, Operations, Privacy or FinOps owner sign-off is recorded. All v2.4 gates are proposed/ready for approval, not CLOSED.",
+    "All agent tools remain executable=false; financial caps remain unconfigured and the AI task-start policy blocks work until budgets are configured."
+  ],
+  "remaining_external_gates": [
+    "ADR-017 identity issuer/session/refresh/MFA and session revocation",
+    "DEC-026/027/032 Moodle Site tenancy, teacher permissions and tenant isolation strategy",
+    "DEC-030 broker/visibility/DLQ/retry tuning and fault-injection evidence",
+    "DEC-033/034 question domain, educational scope, golden dataset and quality threshold",
+    "ADR-018/020 and DEC-028/029 provider/model/region/KMS/retention/RPO/RTO/SLO",
+    "EXT-MDL-* and VER-MDL-* Moodle staging, live capability, write path, and Local Plugin evidence",
+    "Owner approval of P0-H through P0-L"
+  ]
+}

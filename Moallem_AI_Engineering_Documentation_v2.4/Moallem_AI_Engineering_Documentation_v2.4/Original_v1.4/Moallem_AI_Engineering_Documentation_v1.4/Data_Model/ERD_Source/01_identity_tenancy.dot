@@ -1,0 +1,18 @@
+digraph G {
+graph [rankdir=LR, bgcolor="white", pad="0.22", nodesep="0.34", ranksep="0.62", splines=ortho, fontname="Arial"];
+node [shape=record, style="rounded,filled", fillcolor="#F4F7FA", color="#52708D", penwidth=1.1, fontname="Arial", fontsize=10, margin="0.10,0.07"];
+edge [color="#65788A", penwidth=1.0, arrowsize=0.7, fontname="Arial", fontsize=8];
+org [label="organizations\n(tenant root)"];
+mem [label="memberships\n(org + user)"];
+usr [label="users\n(global identity)"];
+mr [label="membership_roles"];
+role [label="roles"];
+rp [label="role_permissions"];
+perm [label="permissions"];
+org -> mem [label="1 : N"];
+usr -> mem [label="1 : N"];
+mem -> mr [label="1 : N"];
+role -> mr [label="1 : N"];
+role -> rp [label="1 : N"];
+perm -> rp [label="1 : N"];
+}

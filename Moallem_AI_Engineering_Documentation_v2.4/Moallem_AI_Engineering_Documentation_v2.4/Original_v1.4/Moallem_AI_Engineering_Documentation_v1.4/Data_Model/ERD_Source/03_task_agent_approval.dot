@@ -1,0 +1,22 @@
+digraph G {
+graph [rankdir=LR, bgcolor="white", pad="0.22", nodesep="0.34", ranksep="0.62", splines=ortho, fontname="Arial"];
+node [shape=record, style="rounded,filled", fillcolor="#F4F7FA", color="#52708D", penwidth=1.1, fontname="Arial", fontsize=10, margin="0.10,0.07"];
+edge [color="#65788A", penwidth=1.0, arrowsize=0.7, fontname="Arial", fontsize=8];
+org [label="organizations"];
+task [label="tasks\n(business lifecycle)"];
+te [label="task_events\n(append-only)"];
+step [label="task_steps"];
+run [label="agent_runs\n(orchestration run)"];
+tool [label="tool_invocations\n(external effect)"];
+snap [label="snapshots\n(immutable content + target)"];
+app [label="approvals\n(decision + hash)"];
+org -> task [label="1 : N"];
+task -> te [label="1 : N"];
+task -> step [label="1 : N"];
+task -> run [label="1 : N"];
+run -> step [label="1 : N"];
+run -> tool [label="1 : N"];
+task -> snap [label="1 : N"];
+snap -> app [label="1 : N"];
+task -> tool [label="1 : N"];
+}
