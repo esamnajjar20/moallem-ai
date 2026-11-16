@@ -129,4 +129,3 @@ class MoodleReadService:
             course_id=course_id,
             include_file_metadata=include_file_metadata,
         )
-

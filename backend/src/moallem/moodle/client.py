@@ -27,8 +27,8 @@ from moallem.moodle.errors import (
 )
 from moallem.moodle.url_policy import (
     PrivateNetworkProfile,
-    Resolver,
     ResolvedTarget,
+    Resolver,
     SiteUrl,
     resolve_pinned,
 )
@@ -52,7 +52,7 @@ class TransportResponse:
 
 
 class MoodleTransport(Protocol):
-    """Real implementation (urllib/httpx) lives with the hosting decision (ADR-020). It MUST:
+    """The opt-in stdlib transport implements these requirements. A transport MUST:
     connect to target.ip:target.port with SNI/Host = target.host, verify TLS against target.host,
     not follow redirects, enforce timeout_s and abort once max_bytes is exceeded."""
 
@@ -145,7 +145,7 @@ class MoodleClient:
                 timeout_s=self._timeout_s,
                 max_bytes=max_bytes,
             )
-        except (TimeoutError, OSError) as exc:
+        except (TimeoutError, OSError):
             raise MoodleUnavailable("moodle request failed") from None
         if 300 <= resp.status < 400:
             raise MoodleUnavailable("unexpected redirect (not followed)")

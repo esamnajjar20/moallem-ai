@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from moallem.domain.errors import CursorInvalid
+from moallem.moodle.client import TransportResponse
 from moallem.moodle.errors import MoodleResponseInvalid, UnsafeMoodleUrl
 from moallem.moodle.read import (
     all_files,
@@ -18,7 +19,6 @@ from moallem.moodle.read import (
     parse_site_info,
     strip_html,
 )
-from moallem.moodle.client import TransportResponse
 from tests.moodle.fakes import SITE_INFO, TOKEN, make_client
 
 NOW = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
@@ -62,8 +62,16 @@ def test_function_hash_is_order_independent_and_changes_with_list() -> None:
 
 @pytest.mark.parametrize(
     "bad",
-    [[], "x", {}, {**SITE_INFO, "functions": "nope"}, {**SITE_INFO, "release": ""},
-     {**SITE_INFO, "userid": "42"}, {**SITE_INFO, "userid": True}, {**SITE_INFO, "version": None}],
+    [
+        [],
+        "x",
+        {},
+        {**SITE_INFO, "functions": "nope"},
+        {**SITE_INFO, "release": ""},
+        {**SITE_INFO, "userid": "42"},
+        {**SITE_INFO, "userid": True},
+        {**SITE_INFO, "version": None},
+    ],
 )
 def test_malformed_site_info_rejected(bad: Any) -> None:
     with pytest.raises(MoodleResponseInvalid):
@@ -73,8 +81,14 @@ def test_malformed_site_info_rejected(bad: Any) -> None:
 # ------------------------------------------------------------ courses
 
 COURSES = [
-    {"id": 3, "fullname": "  Physics   101 ", "shortname": "PHY101", "visible": 1,
-     "startdate": 1767225600, "enddate": 0},
+    {
+        "id": 3,
+        "fullname": "  Physics   101 ",
+        "shortname": "PHY101",
+        "visible": 1,
+        "startdate": 1767225600,
+        "enddate": 0,
+    },
     {"id": 1, "fullname": "algebra", "shortname": "", "visible": 0},
     {"id": 2, "displayname": "Biology", "visible": 1},
     {"id": 9, "fullname": ""},  # unusable: skipped, not invented
@@ -105,8 +119,10 @@ def test_course_dto_matches_contract_shape() -> None:
 
 def test_pagination_has_no_gaps_or_duplicates() -> None:
     c, t = make_client()
-    t.json_for("core_enrol_get_users_courses",
-               [{"id": i, "fullname": f"Course {i:02d}"} for i in range(1, 8)])
+    t.json_for(
+        "core_enrol_get_users_courses",
+        [{"id": i, "fullname": f"Course {i:02d}"} for i in range(1, 8)],
+    )
     seen, cursor = [], None
     while True:
         p = list_teacher_courses(c, moodle_user_id=1, cursor=cursor, page_size=3)
@@ -124,8 +140,17 @@ def _b64(text: str) -> str:
 
 @pytest.mark.parametrize(
     "bad",
-    ["", "!!", "bw", _b64("x:1"), _b64("o:-1"), _b64("o:abc"), _b64("o:"), _b64("o:" + "9" * 12),
-     encode_offset_cursor(0) + "x"],
+    [
+        "",
+        "!!",
+        "bw",
+        _b64("x:1"),
+        _b64("o:-1"),
+        _b64("o:abc"),
+        _b64("o:"),
+        _b64("o:" + "9" * 12),
+        encode_offset_cursor(0) + "x",
+    ],
 )
 def test_bad_cursor_rejected(bad: str) -> None:
     with pytest.raises(CursorInvalid):
@@ -150,23 +175,50 @@ def test_non_list_course_response_rejected() -> None:
 
 CONTENTS = [
     {
-        "id": 10, "name": "Week 1", "visible": 1,
+        "id": 10,
+        "name": "Week 1",
+        "visible": 1,
         "summary": "<p>Intro <b>text</b></p><script>alert(1)</script><style>x{}</style>",
         "modules": [
-            {"id": 100, "modname": "resource", "name": "Notes", "visible": 1,
-             "url": "https://moodle.example.edu/mod/resource/view.php?id=100",
-             "contents": [
-                 {"type": "file", "filename": "notes.pdf", "filepath": "/", "filesize": 1234,
-                  "mimetype": "application/pdf", "timemodified": 1767225600, "fileurl": PF},
-                 {"type": "file", "filename": "evil.pdf",
-                  "fileurl": "https://evil.example.com/x.pdf"},
-                 {"type": "url", "filename": "link", "fileurl": "https://x.example.com"},
-                 {"type": "file", "filename": "tok.pdf", "fileurl": PF + "?token=LEAK"},
-             ]},
-            {"id": 101, "modname": "quiz", "name": "Quiz 1", "visible": 0,
-             "url": "https://evil.example.com/phish"},
-            {"id": 102, "modname": "page", "name": "Hidden by availability", "visible": 1,
-             "uservisible": 0},
+            {
+                "id": 100,
+                "modname": "resource",
+                "name": "Notes",
+                "visible": 1,
+                "url": "https://moodle.example.edu/mod/resource/view.php?id=100",
+                "contents": [
+                    {
+                        "type": "file",
+                        "filename": "notes.pdf",
+                        "filepath": "/",
+                        "filesize": 1234,
+                        "mimetype": "application/pdf",
+                        "timemodified": 1767225600,
+                        "fileurl": PF,
+                    },
+                    {
+                        "type": "file",
+                        "filename": "evil.pdf",
+                        "fileurl": "https://evil.example.com/x.pdf",
+                    },
+                    {"type": "url", "filename": "link", "fileurl": "https://x.example.com"},
+                    {"type": "file", "filename": "tok.pdf", "fileurl": PF + "?token=LEAK"},
+                ],
+            },
+            {
+                "id": 101,
+                "modname": "quiz",
+                "name": "Quiz 1",
+                "visible": 0,
+                "url": "https://evil.example.com/phish",
+            },
+            {
+                "id": 102,
+                "modname": "page",
+                "name": "Hidden by availability",
+                "visible": 1,
+                "uservisible": 0,
+            },
         ],
     },
     {"id": 11, "name": "Week 2", "visible": 0, "summary": "", "modules": []},
@@ -234,8 +286,14 @@ def test_to_dict_matches_contract_section_shape() -> None:
     res, *_ = _contents()
     d = res.sections[0].to_dict()
     assert set(d) == {"section_id", "name", "visible", "summary", "modules"}
-    assert set(d["modules"][0]) == {"module_id", "module_type", "name", "visible", "url",
-                                    "source_ref_id"}
+    assert set(d["modules"][0]) == {
+        "module_id",
+        "module_type",
+        "name",
+        "visible",
+        "url",
+        "source_ref_id",
+    }
 
 
 @pytest.mark.parametrize("cid", ["", "abc", "1;2", "-1", "1 2", "9" * 30])
@@ -245,8 +303,9 @@ def test_course_id_must_be_numeric(cid: str) -> None:
         get_course_contents(c, connection_id="c", course_id=cid)
 
 
-@pytest.mark.parametrize("bad", [{"x": 1}, [1], [{"id": "x", "modules": []}],
-                                 [{"id": 1, "modules": [{"id": "x"}]}]])
+@pytest.mark.parametrize(
+    "bad", [{"x": 1}, [1], [{"id": "x", "modules": []}], [{"id": 1, "modules": [{"id": "x"}]}]]
+)
 def test_malformed_contents_rejected(bad: Any) -> None:
     c, t = make_client()
     t.json_for("core_course_get_contents", bad)
@@ -272,7 +331,8 @@ def test_oversized_course_is_truncated_and_flagged() -> None:
         "https://moodle.example.edu/webservice/pluginfile.php/%2e%2e/x",
         "https://moodle.example.edu/webservice/pluginfile.php/1/a?token=x",
         "https://moodle.example.edu/webservice/pluginfile.php/1/a#f",
-        None, 5,
+        None,
+        5,
     ],
 )
 def test_file_download_path_rejects_anything_off_site(url: Any) -> None:

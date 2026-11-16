@@ -76,7 +76,7 @@ def strip_html(value: object, limit: int = MAX_TEXT) -> str:
     try:
         p.feed(value)
         p.close()
-    except Exception:  # noqa: BLE001 - malformed markup must never break a read
+    except Exception:
         return " ".join(value.split())[:limit]
     return " ".join("".join(p.parts).split())[:limit]
 

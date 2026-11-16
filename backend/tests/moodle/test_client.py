@@ -1,5 +1,5 @@
 import json
-import pickle  # noqa: S403 - used only to prove Token refuses serialisation
+import pickle
 
 import pytest
 
@@ -17,7 +17,11 @@ from tests.moodle.fakes import PUBLIC, TOKEN, FakeResolver, make_client
 
 def test_flatten_params_moodle_array_syntax() -> None:
     assert flatten_params({"a": 1, "b": True, "c": [10, 20], "d": [{"x": "y"}]}) == {
-        "a": "1", "b": "1", "c[0]": "10", "c[1]": "20", "d[0][x]": "y",
+        "a": "1",
+        "b": "1",
+        "c[0]": "10",
+        "c[1]": "20",
+        "d[0][x]": "y",
     }
     with pytest.raises(ValueError):
         flatten_params({"a": None})
@@ -122,7 +126,10 @@ def test_non_json_and_oversize_responses_rejected() -> None:
     with pytest.raises(MoodleResponseInvalid):
         c.call("core_webservice_get_site_info")
     big = MoodleClient(
-        site=c.site, token=Token(TOKEN), transport=t, resolver=FakeResolver(PUBLIC),
+        site=c.site,
+        token=Token(TOKEN),
+        transport=t,
+        resolver=FakeResolver(PUBLIC),
         max_response_bytes=10,
     )
     t.raw = TransportResponse(200, json.dumps({"a": "x" * 50}).encode())

@@ -15,7 +15,10 @@ from tests.moodle.fakes import FakeResolver
 def test_normalizes_to_canonical_https_root() -> None:
     s = normalize_site_url("https://Moodle.Example.EDU/")
     assert (s.host, s.port, s.base_path, s.root) == (
-        "moodle.example.edu", 443, "", "https://moodle.example.edu"
+        "moodle.example.edu",
+        443,
+        "",
+        "https://moodle.example.edu",
     )
     assert normalize_site_url("https://moodle.example.edu/lms//moodle/").base_path == "/lms/moodle"
 
@@ -23,16 +26,33 @@ def test_normalizes_to_canonical_https_root() -> None:
 @pytest.mark.parametrize(
     "bad",
     [
-        "", "http://moodle.example.edu", "ftp://moodle.example.edu", "moodle.example.edu",
-        "https://user:pw@moodle.example.edu", "https://moodle.example.edu?x=1",
-        "https://moodle.example.edu/#frag", "https://moodle.example.edu:8443",
-        "https://moodle.example.edu:99999", "https://moodle.example.edu/a/../b",
-        "https://moodle.example.edu/%2e%2e/x", "https://moodle.example.edu/a b",
-        "https://moodle.example.edu\\@evil.com", "https://127.0.0.1", "https://[::1]",
-        "https://2130706433", "https://0x7f.1", "https://localhost", "https://a.localhost",
-        "https://metadata.google.internal", "https://svc.internal", "https://printer.local",
-        "https://singlelabel", "https://-bad.example.edu", "https://" + "a" * 70 + ".edu",
-        "https://169.254.169.254", "https://moodle.example.edu/" + "x" * 3000,
+        "",
+        "http://moodle.example.edu",
+        "ftp://moodle.example.edu",
+        "moodle.example.edu",
+        "https://user:pw@moodle.example.edu",
+        "https://moodle.example.edu?x=1",
+        "https://moodle.example.edu/#frag",
+        "https://moodle.example.edu:8443",
+        "https://moodle.example.edu:99999",
+        "https://moodle.example.edu/a/../b",
+        "https://moodle.example.edu/%2e%2e/x",
+        "https://moodle.example.edu/a b",
+        "https://moodle.example.edu\\@evil.com",
+        "https://127.0.0.1",
+        "https://[::1]",
+        "https://2130706433",
+        "https://0x7f.1",
+        "https://localhost",
+        "https://a.localhost",
+        "https://metadata.google.internal",
+        "https://svc.internal",
+        "https://printer.local",
+        "https://singlelabel",
+        "https://-bad.example.edu",
+        "https://" + "a" * 70 + ".edu",
+        "https://169.254.169.254",
+        "https://moodle.example.edu/" + "x" * 3000,
     ],
 )
 def test_malformed_or_dangerous_urls_rejected(bad: str) -> None:
@@ -52,9 +72,26 @@ def test_idn_host_is_punycoded() -> None:
 
 @pytest.mark.parametrize(
     "ip",
-    ["127.0.0.1", "10.0.0.5", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1",
-     "0.0.0.0", "224.0.0.1", "240.0.0.1", "::1", "fe80::1", "fc00::1", "ff02::1",
-     "::ffff:127.0.0.1", "::ffff:10.0.0.1", "fd00:ec2::254", "100.100.100.200", "168.63.129.16"],
+    [
+        "127.0.0.1",
+        "10.0.0.5",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.169.254",
+        "100.64.0.1",
+        "0.0.0.0",  # noqa: S104 - verify the resolver rejects the unspecified address
+        "224.0.0.1",
+        "240.0.0.1",
+        "::1",
+        "fe80::1",
+        "fc00::1",
+        "ff02::1",
+        "::ffff:127.0.0.1",
+        "::ffff:10.0.0.1",
+        "fd00:ec2::254",
+        "100.100.100.200",
+        "168.63.129.16",
+    ],
 )
 def test_non_public_destinations_denied(ip: str) -> None:
     site = normalize_site_url("https://moodle.example.edu")

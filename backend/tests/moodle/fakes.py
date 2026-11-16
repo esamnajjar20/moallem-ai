@@ -44,8 +44,13 @@ class FakeTransport:
         max_bytes: int,
     ) -> TransportResponse:
         self.calls.append(
-            {"target": target, "path": path, "form": dict(form), "timeout_s": timeout_s,
-             "max_bytes": max_bytes}
+            {
+                "target": target,
+                "path": path,
+                "form": dict(form),
+                "timeout_s": timeout_s,
+                "max_bytes": max_bytes,
+            }
         )
         if self.raise_exc is not None:
             raise self.raise_exc
