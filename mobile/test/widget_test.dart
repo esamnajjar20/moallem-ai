@@ -6,8 +6,9 @@ import 'package:moallem_mobile/core/app_config.dart';
 import 'package:moallem_mobile/core/providers.dart';
 
 void main() {
-  testWidgets('shell renders in Arabic and lays out right-to-left',
-      (tester) async {
+  testWidgets('shell renders in Arabic and lays out right-to-left', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -21,7 +22,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('app-title')), findsOneWidget);
-    final dir = Directionality.of(tester.element(find.byKey(const Key('app-title'))));
-    expect(dir, TextDirection.rtl);
+    final direction = Directionality.of(
+      tester.element(find.byKey(const Key('app-title'))),
+    );
+    expect(direction, TextDirection.rtl);
   });
 }

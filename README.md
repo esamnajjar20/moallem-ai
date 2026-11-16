@@ -2,30 +2,42 @@
 
 Planning baseline: Moallem AI Engineering Documentation v2.4.
 
-Status:
-- Backend P1 gate: **closed locally** (2026-11-16) — see [`docs/PHASE1_STATUS.md`](docs/PHASE1_STATUS.md)
-- Post-P1 / domain core: [`docs/PHASE2_STATUS.md`](docs/PHASE2_STATUS.md)
+## Current implementation status
 
-```
-backend/    FastAPI API + Worker skeleton (Python 3.12) + domain core
-mobile/     Flutter skeleton (Riverpod, RTL Arabic shell)
-contracts/  openapi.draft.yaml (draft v0.4.0, not frozen)
-docs/       ADRs (provisional) and phase status
+- Backend foundation: implementation exists; the current source test suite passes locally (82 tests).
+- Mobile foundation: Flutter shell exists; toolchain is now pinned to Flutter 3.50.0 / Dart 3.14.0.
+- **P1 is not yet closed:** `mobile/pubspec.lock` and generated Android/iOS runner projects must be created with the pinned Flutter SDK, committed, and verified by GitHub Actions.
+- ADR-015 (Riverpod) and ADR-016 (mypy) remain provisional pending owner sign-off.
+- P2/P4 domain primitives are not a substitute for the later persistence, identity, Moodle, or queue integrations.
+
+## Repository layout
+
+```text
+backend/    FastAPI API + Worker skeleton (Python 3.12.16)
+mobile/     Flutter shell (Flutter 3.50.0 / Dart 3.14.0, Arabic RTL)
+contracts/  OpenAPI draft and agent runtime limits (not frozen)
+docs/       ADRs and phase status
+scripts/    Repeatable local bootstrap and CI prerequisite checks
 ```
 
-Backend quick start:
+## Backend quick start
 
 ```bash
-cd backend && cp .env.example .env
+cd backend
+cp .env.example .env
 uv sync --locked
-make check              # lint, typecheck, tests, build, audit
-make api                # http://127.0.0.1:8000/healthz  /readyz
+make -C .. check
+make -C .. api
 ```
 
-Verified locally (2026-11-16):
-- `uv.lock` present
-- ruff format/check clean
-- mypy strict: 24 files OK
-- pytest: **82 passed**
+## Mobile one-time setup
 
-Synthetic data only. No real student data in development (Deployment Spec §2).
+Install Flutter 3.50.0, then run from the repository root:
+
+```bash
+./scripts/bootstrap_mobile.sh
+```
+
+Review and commit the generated `mobile/pubspec.lock`, `mobile/android/`, and `mobile/ios/`.
+
+See [`docs/PHASE1_STATUS.md`](docs/PHASE1_STATUS.md) for the exact exit gate and evidence.

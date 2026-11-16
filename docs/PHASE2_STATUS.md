@@ -1,6 +1,6 @@
 # حالة ما بعد P0/P1 — ما تبقّى وما نُفّذ
 
-**الخلاصة:** بوابة P1 Backend أُغلقت محلياً (uv.lock + ruff + mypy strict + 82 اختباراً). لا يمكن إغلاق أي بند P0 من هذه البيئة (لا أصحاب قرار، لا Moodle staging). نواة النطاق (domain core) مكتملة منطقياً مع 56 اختباراً نطاقياً ضمن الـ82.
+**الخلاصة:** تحقق تقدم Backend P1 محلياً (uv.lock + نتائج lint/type-check مسجلة سابقاً + 82 اختباراً)، لكن **بوابة P1 الكلية غير مغلقة** حتى إنشاء `mobile/pubspec.lock` ومشروعي Android/iOS وتشغيل CI الأخضر. لا يمكن إغلاق أي بند P0 من هذه البيئة (لا أصحاب قرار، لا Moodle staging). نواة النطاق (domain core) مكتملة منطقياً مع 56 اختباراً نطاقياً ضمن الـ82.
 
 **آخر تحديث تحقق:** 2026-11-16
 
@@ -9,8 +9,8 @@
 | المرحلة | الحالة | ما يمنعها | هل أنجزت جزءاً منها هنا؟ |
 |---|---|---|---|
 | P0 | لم تُغلق | أشخاص وجهات: مالكون، مسؤول Moodle، توقيعات | لا (حزمة P0 جاهزة سابقاً) |
-| P1 Backend | **مغلقة محلياً** | تشغيل CI على GitHub فقط | نعم: lock + lint + types + 82 tests |
-| P1 Mobile | مفتوح | Flutter + pubspec.lock + platforms | لا (لا Flutter هنا) |
+| P1 Backend | تحقق محلي مسجل؛ CI غير مثبت | تشغيل CI المقفل على GitHub وتأكيد Python 3.12.16 | نعم: lock + نتائج lint/types سابقة + 82 tests |
+| P1 Mobile | مفتوح | Flutter 3.50.0 + pubspec.lock + Android/iOS runners | تم تثبيت toolchain وإضافة bootstrap؛ لم تُولد المخرجات لغياب Flutter |
 | P2 هوية/عضوية | جزئي | ADR-017 (issuer/session)، DEC-026/027/032 | نعم: سياق العضوية + `/me` |
 | P3 قراءة Moodle | محجوب | EXT-MDL-001..003 | لا |
 | P4 مهام/اعتمادية | منطق نطاق مكتمل | DEC-030 (broker)، DEC-031 (DDL/PK)، قاعدة بيانات | نعم: آلة الحالات، الأحداث، idempotency، outbox |
@@ -38,7 +38,7 @@
   - `ruff format` + `ruff check` → نظيف
   - `mypy --strict` → 24 ملفاً بلا ملاحظات
   - `pytest` → **82 passed** (domain + api + config + me + contract parity)
-- **لم يُشغَّل:** CI على GitHub، Flutter، `uv build` / `pip-audit` داخل venv مقفل (قيود بيئة)، `uvicorn` حي.
+- **لم يُشغَّل في ذلك التحقق:** CI على GitHub، Flutter، `uv build` / `pip-audit` داخل venv مقفل (قيود بيئة)، `uvicorn` حي. في مراجعة P1 التالية أُعيد تشغيل اختبارات المصدر على Python 3.13.5 فقط؛ هذا لا يثبت اجتياز Python 3.12.16 المقفل.
 
 ## 4) قرارات اتخذتها وتحتاج موافقة (لا تُعد مغلقة)
 
@@ -49,8 +49,8 @@
 
 ## 5) الخطوات التالية بالترتيب
 
-1. إدخال `backend/uv.lock` في المستودع وتشغيل CI على PR (Backend job يجب أن يمر).
-2. على جهاز بـ Flutter: إنشاء platforms + `pubspec.lock` ثم Mobile job.
+1. تشغيل `scripts/bootstrap_mobile.sh` على Flutter 3.50.0 ثم إدخال `mobile/pubspec.lock` وAndroid/iOS runners في المستودع.
+2. تشغيل CI على PR والتحقق من Backend وAndroid وiOS وSecret Scan جميعها خضراء.
 3. أرسل طلب Moodle Admin وعيّن المالكين. كل ما يخص Moodle ينتظر الرد.
 4. وقّع/عدّل البنود الأربعة في القسم 4 + ADR-015/016.
 5. بعد نجاح CI: الإبقاء على ربط `membership` و`/me`؛ استبدال `NoAuthenticator` عند حسم ADR-017.

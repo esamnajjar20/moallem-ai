@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,60 +13,142 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# NOTE: pin third-party actions to full commit SHAs before the first real release (ADR-025).
-
 jobs:
   backend:
+    name: Backend (Python 3.12.16)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv python install 3.12
-      # Fails if uv.lock is missing or out of date: lockfile must be committed (P1-01).
-      - run: uv sync --locked
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install pinned uv and Python
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: 0.13.6
+          python-version: 3.12.16
+          enable-cache: true
+
+      - name: Verify toolchain and lockfile
+        run: |
+          test "$(cat .python-version)" = "3.12.16"
+          uv --version
+          uv python install 3.12.16
+          uv sync --locked --python 3.12.16
+
       - name: Lint and format
         run: |
-          uv run ruff check .
-          uv run ruff format --check .
-      - name: "Type check (ADR-016 provisional, mypy strict)"
-        run: uv run mypy
-      - name: Unit tests
-        run: uv run pytest
+          uv run --locked ruff check .
+          uv run --locked ruff format --check .
+
+      - name: Strict type check
+        run: uv run --locked mypy
+
+      - name: Unit and API tests
+        run: uv run --locked pytest
+
       - name: Build wheel
         run: uv build
-      - name: Dependency CVE scan
-        run: uv run pip-audit
 
-  mobile:
+      - name: Dependency vulnerability audit
+        run: uv run --locked pip-audit
+
+  mobile-android:
+    name: Flutter analyze, tests and Android build
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: mobile
     steps:
-      - uses: actions/checkout@v4
-      # TODO(P1-01): pin an exact Flutter version here once chosen; "stable" alone is not reproducible.
-      - uses: subosito/flutter-action@v2
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
-          cache: true
-      # Fails if pubspec.lock is missing or would change: lockfile must be committed (P1-01).
-      - run: flutter pub get --enforce-lockfile
-      - run: dart format --output=none --set-exit-if-changed .
-      - run: flutter analyze
-      - run: flutter test
-      - name: Debug build (runs once platform folders are committed)
-        if: ${{ hashFiles('mobile/android/**') != '' }}
+          flutter-version: 3.50.0
+          cache: false
+
+      - name: Verify committed native runners and lockfile
+        working-directory: .
+        run: ./scripts/check_mobile_prerequisites.sh
+
+      - name: Install locked Dart dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Dart format
+        run: dart format --output=none --set-exit-if-changed lib test
+
+      - name: Flutter static analysis
+        run: flutter analyze --fatal-infos
+
+      - name: Flutter tests
+        run: flutter test --reporter expanded
+
+      - name: Build Android APK
         run: flutter build apk --debug
 
-  secrets:
-    runs-on: ubuntu-24.04
+  mobile-ios:
+    name: Flutter iOS build (unsigned)
+    runs-on: macos-26
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: mobile
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: 3.50.0
+          cache: false
+
+      - name: Verify committed native runners and lockfile
+        working-directory: .
+        run: ./scripts/check_mobile_prerequisites.sh
+
+      - name: Install locked Dart dependencies
+        run: flutter pub get --enforce-lockfile
+
+      - name: Dart format, analysis and tests
+        run: |
+          dart format --output=none --set-exit-if-changed lib test
+          flutter analyze --fatal-infos
+          flutter test --reporter expanded
+
+      - name: Build iOS without signing
+        run: flutter build ios --release --no-codesign
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+          persist-credentials: false
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"

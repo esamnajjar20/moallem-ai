@@ -1,23 +1,25 @@
 name: moallem_mobile
-description: Moallem AI teacher app (P1 skeleton).
+description: Moallem AI teacher app (P1 foundation shell).
 publish_to: "none"
 version: 0.0.1+1
 
 environment:
-  sdk: ">=3.4.0 <4.0.0"
+  # Flutter is pinned separately in .flutter-version and pubspec's flutter constraint.
+  sdk: ">=3.8.0 <4.0.0"
+  flutter: "3.50.0"
 
 dependencies:
   flutter:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
-  # ADR-015 (PROVISIONAL): Riverpod. See ../docs/adr/ADR-015-flutter-state-management.md
-  flutter_riverpod: ^2.5.1
+  # ADR-015 remains provisional; P1 only needs a testable provider container.
+  flutter_riverpod: ^2.6.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  flutter_lints: ^4.0.0
+  flutter_lints: ^6.0.0
 
 flutter:
   uses-material-design: true

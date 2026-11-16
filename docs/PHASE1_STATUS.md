@@ -1,57 +1,83 @@
-# حالة المرحلة P1 — Repository Foundation
+# P1 — Repository Foundation: closure status
 
-**التفسير المعتمد هنا:** "المرحلة الأولى" = P1 في `09_Implementation_Roadmap_v2.0` (أول مرحلة قابلة للبناء).
-P0 (قرارات وصلاحيات Moodle/الهوية) تحتاج أصحاب قرار وبيئة staging، ولم تُمس.
+**Status: NOT CLOSED.** Backend foundations exist and the source test suite passes, but the
+mobile lockfile/native projects are not yet present and no GitHub Actions run has demonstrated a
+green end-to-end repository gate.
 
-**بوابة الخروج (Build + CI green): شبه مغلقة محلياً (Backend).** لم يُشغَّل CI على GitHub بعد. Flutter lockfile ومنصات لم تُنشأ (لا Flutter في هذه البيئة).
+**Assessment date:** 2026-11-16  
+**Baseline:** `09_Implementation_Roadmap_v2.0` in Engineering Documentation v2.4  
+**Exit gate:** reproducible Backend + Flutter builds, lint/type-check/test gates, and a green CI run.
 
-**آخر تشغيل تحقق:** 2026-11-16
+## P1 checklist
 
-## البنود
-
-| البند | المنجز | الدليل الفعلي | الناقص حتى يُغلق |
+| ID | Requirement | Current state | Evidence / remaining work |
 |---|---|---|---|
-| P1-01 skeleton (API/Worker/Flutter) | `backend/` (API + Worker)، `mobile/`، **`uv.lock` موجود** | `uv.lock` (887 سطر)، 82 اختباراً | **`pubspec.lock`** + مجلدات Flutter للمنصة؛ تثبيت إصدار Flutter |
-| P1-02 CI gates | `.github/workflows/ci.yml`: lint/format/mypy/pytest/build/pip-audit، Flutter analyze/test، gitleaks | YAML موجود | **لم يُشغَّل على GitHub بعد**؛ Backend محلياً أخضر |
-| P1-03 config + health | `config.py` fail-fast، `/healthz`، `/readyz` | 82/82 اختباراً نجحت (يشمل config/api/me) | لا شيء جوهري لـ Backend |
+| P1-01 | API, Worker and Flutter skeleton | PARTIAL | FastAPI and Worker skeletons plus Flutter RTL shell exist. `backend/uv.lock` is committed. Flutter is now pinned to 3.50.0, but `mobile/pubspec.lock`, `mobile/android/`, and `mobile/ios/` are still missing. Run `scripts/bootstrap_mobile.sh` on a machine with Flutter 3.50.0 and commit its generated outputs. |
+| P1-02 | CI gates | CONFIGURED / NOT VERIFIED | CI now pins GitHub Actions to immutable commit SHAs and defines Backend, Android, iOS, and secret-scan jobs. It has not been run by GitHub for this uploaded snapshot. CI intentionally fails mobile prerequisites until the Flutter lockfile and native runners are committed. |
+| P1-03 | Config, health and readiness | IMPLEMENTED | `config.py` validates configuration fail-fast; `/healthz` and `/readyz` exist; structured JSON logging redacts sensitive values and carries request IDs. API/config/logging tests are included. |
 
-## ما تحقق فعلاً (2026-11-16)
+## Verification evidence
 
-| الفحص | النتيجة |
-|--------|---------|
-| `uv lock` | نجح → `backend/uv.lock` |
-| `ruff format` | 39 files unchanged |
-| `ruff check` | All checks passed |
-| `mypy --strict` | Success: no issues found in 24 source files |
-| `pytest` (كامل) | **82 passed** |
-| Domain only | 56 passed |
-| Flutter | غير متاح في هذه البيئة |
+| Check | Result | Qualification |
+|---|---|---|
+| Backend tests | **82 passed** | Re-run in this environment with `python3 -m pytest -q`; runtime Python was 3.13.5, while the project contract is Python 3.12.x. This is a useful source-level smoke test, not the pinned-toolchain gate. |
+| Ruff format/check | Historical status says passed | The previous `PHASE1_STATUS` recorded 39 files unchanged and Ruff clean. Ruff is not installed in the current execution environment, so that result was not independently repeated here. |
+| mypy strict | Historical status says 24 source files passed | The previous status file recorded success; ADR-016 text was inconsistent and has been corrected. mypy is not installed in the current execution environment, so the check was not independently repeated here. |
+| Backend locked sync/build/audit | NOT VERIFIED HERE | Python 3.12.16 and dependency tools could not be downloaded because this execution environment has no DNS/network access. CI now runs these checks with a pinned interpreter and uv. |
+| Flutter format/analyze/tests/builds | NOT RUN | Flutter and Dart are not installed in this environment. A repeatable bootstrap script and pinned CI jobs are provided. |
+| GitHub Actions | NOT RUN | A workflow file is not evidence of a passing workflow run. A push/PR to the actual GitHub repository is required. |
 
-## قرارات مؤقتة (ليست إغلاقاً)
+## Toolchain pins added
 
-- ADR-015 → Riverpod، ADR-016 → mypy strict: انظر `docs/adr/`. حالتهما في السجل تبقى `OPEN` حتى توقيع المالكين.
-- النطاقات في `pyproject.toml` (`>=,<`) وليست إصدارات مثبتة؛ التثبيت الفعلي عبر `uv.lock` (موجود الآن).
+- Backend Python: `backend/.python-version` = `3.12.16`.
+- Backend uv in CI: `0.13.6` (via the pinned `astral-sh/setup-uv` action).
+- Mobile Flutter: `mobile/.flutter-version` and `mobile/.fvmrc` = `3.50.0`.
+- Mobile Dart: supplied by Flutter 3.50.0 (Dart 3.14.0).
+- Flutter package versions remain locked only after `flutter pub get` creates and commits `mobile/pubspec.lock`.
 
-## ملاحظات عقد
+## CI hardening applied
 
-- `/healthz` و`/readyz` خارج `/api/v1` ولا تدخل ضمن العمليات الـ17 في OpenAPI draft. يلزم قرار: إبقاؤهما تشغيلية فقط (الافتراضي هنا) أو إضافتهما للعقد.
-- أخطاء التحقق ترجع `400 VALIDATION_FAILED` (حسب استجابة BadRequest في المسودة) بأسماء الحقول فقط دون القيم.
-- ربط أخطاء HTTP العامة (404 وغيره) بالـ`ErrorCode` تقريب في P1؛ يُراجع مع اعتماد عقد الأخطاء.
-- `X-Request-ID`: يُقبل إن طابق `[A-Za-z0-9._-]{1,128}` وإلا يُولَّد `req_<uuid>`.
+- All third-party GitHub Actions are pinned to immutable commit SHAs.
+- The secret scanner was upgraded from Gitleaks Action v2 (Node 20) to v3 (Node 24).
+- Android runs format, analysis, tests and a debug APK build on Ubuntu.
+- iOS runs format, analysis, tests and an unsigned release build on macOS.
+- Both mobile jobs fail clearly when the lockfile or committed platform runners are missing.
 
-## عمداً خارج P1
+## One-time mobile bootstrap
 
-Auth/membership الحقيقي (P2)، Moodle (P3)، DB/outbox/queue الفعلي (P4، وDEC-030 مفتوح)، حدود الوكيل وميزانيات التكلفة، Dockerfile/نشر، OpenTelemetry.
+From the repository root, on a machine with Flutter 3.50.0 installed:
 
-## الخطوات المتبقية لإغلاق البوابة بالكامل
+```bash
+./scripts/bootstrap_mobile.sh
+```
 
-1. ~~`uv lock` + ruff + mypy + pytest~~ **تم محلياً.**
-2. على جهاز فيه Flutter:
-   ```bash
-   cd mobile && flutter create --platforms=android,ios --project-name moallem_mobile .
-   flutter pub get
-   flutter analyze && flutter test
-   ```
-   ثم إدخال `pubspec.lock`.
-3. دفع `uv.lock` (+ `pubspec.lock` عند الجاهزية) وتشغيل CI على PR؛ تثبيت actions بـSHA.
-4. توقيع ADR-015/016 (أو استبدالهما) وتحديث السجل والـbacklog (P0-06/P0-07).
+Then review and commit:
+
+```text
+mobile/pubspec.lock
+mobile/android/
+mobile/ios/
+```
+
+The default native application ID prefix (`com.moallem`) is provisional. Set
+`MOALLEM_MOBILE_ORG` to the product-owner-approved reverse-DNS prefix before bootstrap if the
+publisher identity has been decided. Do not ship until the identifier is confirmed.
+
+## Remaining P1 technical exit actions
+
+1. Run the one-time Flutter bootstrap and commit the generated lockfile and Android/iOS runners.
+2. Run `uv sync --locked`, `make check`, and the mobile checks using the pinned toolchains.
+3. Push the updated repository and obtain a successful GitHub Actions run for all four jobs.
+
+**Do not mark the P1 technical gate CLOSED until all three actions have evidence.** ADR-015 and
+ADR-016 owner approvals remain separate foundation-governance work and must be completed before
+those decisions are treated as final. P2, Moodle integration, durable persistence/queue
+infrastructure, and AI functionality remain outside this P1 closure gate.
+
+## Toolchain and action source references
+
+- Flutter 3.50 release (11 November 2026; Dart 3.14): https://docs.flutter.dev/release/whats-new
+- Python 3.12.16 security release (25 October 2026): https://www.python.org/downloads/release/python-31216/
+- GitHub Actions Node 20 removal (23 September 2026): https://github.blog/changelog/2026-09-23-node-20-is-no-longer-available-on-github-actions-runners/
+- Flutter action release history: https://github.com/subosito/flutter-action/releases
+- Gitleaks Action v3 migration: https://github.com/gitleaks/gitleaks-action/releases
