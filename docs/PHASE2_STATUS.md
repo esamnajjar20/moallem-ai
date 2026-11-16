@@ -1,116 +1,74 @@
-# حالة ما بعد P0/P1 — ما تبقّى وما نُفّذ
+# P2 — Identity and tenancy status
 
-**الخلاصة:** تحقق تقدم Backend P1 محلياً (uv.lock + نتائج lint/type-check مسجلة سابقاً + 82 اختباراً)، لكن **بوابة P1 الكلية غير مغلقة** حتى إنشاء `mobile/pubspec.lock` ومشروعي Android/iOS وتشغيل CI الأخضر. لا يمكن إغلاق أي بند P0 من هذه البيئة (لا أصحاب قرار، لا Moodle staging). نواة النطاق (domain core) مكتملة منطقياً مع 56 اختباراً نطاقياً ضمن الـ82.
+**Status: NOT CLOSED.** Local implementation and HTTP checks pass, but P2 depends on open product,
+security, architecture, and infrastructure decisions. The default authenticator remains
+fail-closed; authorization defaults to `DenyAllPolicy`. No database, Redis, object-storage, or
+queue integration is implemented.
 
-**آخر تحديث تحقق:** 2026-11-16
+**Assessment date:** 2026-11-16
+**Baseline:** Engineering Documentation v2.4
+**Exit gate:** owner-approved identity/session and authorization decisions, configured secret
+management, persistent tenant isolation, and the required infrastructure evidence.
 
-## 1) خريطة المتبقي
+## Verification evidence
 
-| المرحلة | الحالة | ما يمنعها | هل أنجزت جزءاً منها هنا؟ |
-|---|---|---|---|
-| P0 | لم تُغلق | أشخاص وجهات: مالكون، مسؤول Moodle، توقيعات | لا (حزمة P0 جاهزة سابقاً) |
-| P1 Backend | تحقق محلي مسجل؛ CI غير مثبت | تشغيل CI المقفل على GitHub وتأكيد Python 3.12.16 | نعم: lock + نتائج lint/types سابقة + 82 tests |
-| P1 Mobile | مفتوح | Flutter 3.50.0 + pubspec.lock + Android/iOS runners | تم تثبيت toolchain وإضافة bootstrap؛ لم تُولد المخرجات لغياب Flutter |
-| P2 هوية/عضوية | جزئي | ADR-017 (issuer/session)، DEC-026/027/032 | نعم: سياق العضوية + `/me` |
-| P3 قراءة Moodle | محجوب | EXT-MDL-001..003 | لا |
-| P4 مهام/اعتمادية | منطق نطاق مكتمل | DEC-030 (broker)، DEC-031 (DDL/PK)، قاعدة بيانات | نعم: آلة الحالات، الأحداث، idempotency، outbox |
-| P5–P8 | محجوبة | ADR-018/020، DEC-033/034، إثبات Moodle write | لا |
-| P9–P11 | بعيدة | — | لا |
-
-## 2) ما نُفّذ (backend/src/moallem/domain/)
-
-| الملف | القرار/الفجوة | الاختبارات |
+| Check | Result | Evidence |
 |---|---|---|
-| `canonical.py` | GAP-DATA-001، HASH-VECTORS-01، بصمة idempotency | `test_canonical.py` |
-| `tasks.py` | آلة الحالات + DEC-042 (الإلغاء نية لا وعد)، AT-044 | `test_tasks.py` |
-| `events.py` | DEC-044: cursor موقّع حصري، 410 عند انتهاء الاحتفاظ، AT-045 | `test_events.py` |
-| `membership.py` | DEC-039، AT-037، AT-031 | `test_membership.py` |
-| `external.py` | DEC-041: مفاتيح ثابتة، UNKNOWN لا يُعاد، سقف 256 خطوة | `test_external.py` |
-| `idempotency.py` | P4-02، GAP-API-003 | `test_idempotency.py` |
-| `outbox.py` | P4-03 | `test_outbox.py` |
+| Python / locked environment | PASS | Python **3.12.16** (`backend/.python-version`); `uv sync --locked` with uv **0.13.8** resolved 61 packages and checked 60. |
+| Ruff | PASS | Ruff **0.17.5**; `ruff format --check .` and `ruff check .` passed. |
+| mypy | PASS | mypy **1.20.2**; 39 source files, no issues. |
+| Backend tests | PASS | `uv run --locked pytest -ra`: **314 passed, 1 Starlette/httpx deprecation warning**. |
+| Tenancy HTTP tests | PASS | `tests/test_tenancy_api.py`: **6 passed**, including AT-015, AT-031, and AT-037 over FastAPI HTTP requests. |
+| Identity/config HTTP tests | PASS | `test_api.py`, `test_bearer_api.py`, `test_me_api.py`, `test_jwks.py`, `test_config.py`, and `test_checks.py` all passed in the full suite. |
+| Package and dependency audit | PASS WITH QUALIFICATION | `uv build` built sdist and wheel. `pip-audit` found no known vulnerabilities but skipped the unpublished local `moallem 0.0.1` package. |
+| GitHub Actions / production integrations | NOT RUN | A local test result is not a green CI run or evidence from live identity, persistence, or Moodle services. |
 
-مرفق أيضاً `contracts/agent_runtime_limits.v2.4.json` وتطابقه مع الثابت في الشيفرة مُختبَر.
+## Implemented scope
 
-## 3) ما شُغِّل فعلاً (2026-11-16)
+- **Membership context:** active membership is resolved server-side from
+  `X-Active-Membership-ID`; malformed/missing/invalid contexts fail closed. Tenant identity is
+  derived from the membership, not a client-supplied tenant header.
+- **Authorization:** `require_tenant` hides cross-tenant resources as 404 (AT-015), then explicit
+  permission evaluation applies. `DenyAllPolicy` remains the default while DEC-027 is open.
+- **Authentication:** `NoAuthenticator` remains the production default unless issuer/audience
+  configuration is explicitly provided. Bearer verification, issuer/audience/expiry checks, and
+  subject mapping are implemented behind seams; this does not approve ADR-017 or select a provider.
+- **JWKS and RS256:** HTTPS JWKS retrieval has size/cache limits and fails closed. The custom
+  standard-library RS256 verifier is security-sensitive and should be replaced by a vetted
+  implementation.
+- **Secret boundary:** `SecretRef` and `SecretVault` interfaces exist; no operational secret
+  manager or Moodle credential persistence is configured.
+- **Tenant-scoped primitives:** scoped repository interfaces and tenant-derived cache/storage/
+  message keys are unit-tested. They do not provide actual Redis, S3, broker, or database isolation.
+- **P4 domain-only primitives:** task state, idempotency, events, outbox, and inbox logic remain
+  in-memory/domain-level foundations only; no database DDL, dispatcher, or broker was added.
+- **P2/P3 integration seam:** `MoodleReadService` performs tenant, permission, and connection-state
+  checks before exposing a token to the adapter. See `PHASE3_STATUS.md`; live Moodle behavior is
+  still unverified.
 
-- **شُغِّل ونجح:**
-  - `uv lock` → `backend/uv.lock`
-  - `ruff format` + `ruff check` → نظيف
-  - `mypy --strict` → 24 ملفاً بلا ملاحظات
-  - `pytest` → **82 passed** (domain + api + config + me + contract parity)
-- **لم يُشغَّل في ذلك التحقق:** CI على GitHub، Flutter، `uv build` / `pip-audit` داخل venv مقفل (قيود بيئة)، `uvicorn` حي. في مراجعة P1 التالية أُعيد تشغيل اختبارات المصدر على Python 3.13.5 فقط؛ هذا لا يثبت اجتياز Python 3.12.16 المقفل.
+## Open decisions and blockers
 
-## 4) قرارات اتخذتها وتحتاج موافقة (لا تُعد مغلقة)
-
-1. **رفض الأعداد العشرية في المحتوى المجزَّأ.** RFC 8785 يتطلب تنسيق أرقام ECMAScript الذي لا تعيد بايثون إنتاجه دائماً. البديل: أعداد صحيحة (≤ 2^53−1) أو نصوص عشرية. يؤثر في تصميم QuizSpec (الدرجات مثلاً).
-2. **NFC قبل ترتيب JCS.** نتيجته أن حروفاً مثل U+FB33 تتفكك وتتغير مواضعها مقارنة بمتجهات RFC الحرفية؛ المتجهات هنا مبنية على خط المعالجة المقترح لا على RFC وحده. متجهات التبادل مع أنظمة أخرى تحتاج اتفاقاً.
-3. **GAP-TASK-001:** جدول الانتقالات في v2.0 لا يتيح CANCELLED من PLANNING/DRAFTING/VALIDATING/NEEDS_REVISION/APPROVED/EXECUTING/NEEDS_RECONCILIATION، بينما DEC-042 يقتضيه قبل الإرسال أو بعد إثبات غياب الأثر. أضفتها في `CANCEL_EXTENSIONS` منفصلة عن الجدول الحرفي. تحتاج تأكيد المالك.
-4. **كل سياق عضوية غير صالح = 400 `MEMBERSHIP_CONTEXT_INVALID` بنفس الرسالة** (مجهول/غريب/معلّق/مُلغى) لمنع تعداد العضويات. العقد الحالي يستخدم BadRequest لهذا؛ إن فضّلتم 403 فهو تغيير عقد.
-
-## 5) الخطوات التالية بالترتيب
-
-1. تشغيل `scripts/bootstrap_mobile.sh` على Flutter 3.50.0 ثم إدخال `mobile/pubspec.lock` وAndroid/iOS runners في المستودع.
-2. تشغيل CI على PR والتحقق من Backend وAndroid وiOS وSecret Scan جميعها خضراء.
-3. أرسل طلب Moodle Admin وعيّن المالكين. كل ما يخص Moodle ينتظر الرد.
-4. وقّع/عدّل البنود الأربعة في القسم 4 + ADR-015/016.
-5. بعد نجاح CI: الإبقاء على ربط `membership` و`/me`؛ استبدال `NoAuthenticator` عند حسم ADR-017.
-6. DEC-031/030 قبل أي DDL أو outbox فعلي.
-
-## 6) ربط العضوية و`/me`
-
-- `api/deps.py` و`api/me.py` و`tests/test_me_api.py` وتعديل `api/app.py` **شُغِّلت ضمن الـ82 اختباراً**.
-- المصادقة: `NoAuthenticator` افتراضيًا (يرفض كل شيء)، و`DevAuthenticator` يرفض الإنشاء خارج development/test. ADR-017 ما زال مفتوحًا.
-- مستودع العضويات في الذاكرة وفارغ افتراضيًا حتى P4 (يفشل مغلقًا).
-- `INVITED` موجود في `MembershipStatus`؛ تطابق enum مع OpenAPI مُختبَر.
-
-## 7) idempotency وoutbox/inbox (P4-02/P4-03، منطق نطاق فقط)
-
-- `domain/idempotency.py` + اختبارات: HMAC، نطاق، NEW/IN_PROGRESS/REPLAY، تعارض hash = 409، لا انتهاء لسجل خارجي غير مُسوّى.
-- `domain/outbox.py` + اختبارات: PENDING→LEASED→PUBLISHED/DEAD_LETTER، fencing بـ`lease_generation`، inbox dedup.
-- **بلا قيم افتراضية عمداً:** `ttl`، `max_attempts`، `retry_after`، ومفتاح HMAC الخادمي.
-- **غير منجز:** جداول PostgreSQL، المعاملة الواحدة، المُرسِل (dispatcher)، P4-04. كلها بعد DEC-030/031.
-
-## 8) P2 — الهوية والعضوية (جلسة 2026-11-16، تنفيذ جزئي ضمن المتاح)
-
-**P2 لا يُغلق من هنا:** ADR-017 وDEC-026/027/032 مفتوحة، وP2-02 محجوب (Secret Manager)، وP2-03 يحتاج قاعدة بيانات/worker/cache/storage غير موجودة بعد.
-
-| البند | الحالة | ما تغيّر |
+| Decision / evidence | Owner or dependency | State |
 |---|---|---|
-| P2-01 | PARTIAL-CODE | `MembershipContextInvalid` صار **403** (DEC-039 في Planning_Closure_Decisions_v2.4)؛ الرأس المشوّه صار **400 VALIDATION_FAILED** (`MembershipContextMalformed`)؛ الغائب يبقى 400 `MEMBERSHIP_CONTEXT_REQUIRED`. |
-| P2-01/03 | جديد | `domain/authorization.py`: `require_tenant` (مورد مؤسسة أخرى = 404 بلا كشف وجود، AT-015) ثم `authorize` (سياسة صريحة؛ الافتراضي `DenyAllPolicy` لأن DEC-027 مفتوح). |
-| P2-03 | جزئي | اختبارات نطاقية للعزل بين المؤسسات + `tests/test_tenancy_api.py` (AT-037/AT-031/AT-015 عبر HTTP على مسار probe). **طبقات DB/worker/cache/storage غير مغطاة.** |
+| ADR-017 identity provider, issuer/audience, sessions and revocation | Product + Security | OPEN |
+| ADR-015 state-management approval; ADR-016 type-checker approval | Product / Engineering owners | PROVISIONAL |
+| DEC-026 site-sharing model; DEC-027 permission matrix; DEC-032 isolation strategy | Product, Security, Architecture | OPEN |
+| DEC-030 broker and DEC-031 database schema/keys | Architecture / Data owners | OPEN; blocks persistence |
+| Secret Manager selection and operational key custody | Security / Platform owners | OPEN |
+| ADR-020 hosting, network egress, and private-campus connector | Infrastructure / Security owners | OPEN |
+| P0-02/03/04 Moodle staging URL, current API evidence, and teacher account | Moodle administrator | BLOCKED |
+| DEC-033 question-domain selection and AI provider | Product / Education and Engineering owners | OPEN; no AI code added |
 
-**التحقق:** 65 اختباراً نطاقياً نجحت عبر shim محلي (بلا pytest). `tests/test_tenancy_api.py` **لم يُشغَّل** (لا fastapi/httpx في البيئة)، ولم يُشغَّل ruff/mypy.
+Additional engineering proposals remain unapproved: decimal handling and NFC ordering for
+canonical content, task-cancellation transition extensions, and the membership-context error
+mapping. Do not treat these proposals as decisions.
 
-**تعارض وثائقي يحتاج قرار المالك:** `openapi.draft.yaml` يصف `BadRequest` بأنه يشمل «missing/invalid required request context» بينما Closure Decisions v2.4 يحدد 403 للعضوية غير الصالحة. نُفّذ ما في Closure Decisions؛ وصف `BadRequest` في OpenAPI لم يُعدَّل.
+## Security risk and proposed follow-up
 
-### إضافة لاحقة (نفس الجلسة)
+`backend/src/moallem/domain/rs256.py` implements RSA signature verification by hand. Its current
+tests pass, but test success does not provide the assurance of a vetted cryptographic library.
+Replacing it with `PyJWT[crypto]` is recommended as a **separate, owner-approved dependency change**;
+no dependency or lockfile change was made in this verification task.
 
-- `domain/scoped.py`: مستودع مقيّد بالمؤسسة (كل عملية تتطلب `ActiveContext`) + `tests/domain/test_scoped.py`.
-- `domain/secrets.py`: `SecretRef` محجوب في repr/str/log + واجهة `SecretVault` + `tests/domain/test_secrets.py`. **اختيار Secret Manager ما زال مفتوحاً.**
-- `docs/P2_DECISION_PROPOSALS.md`: مقترحات ADR-017 وDEC-026/027/032 **بحالة PROPOSED، بانتظار توقيع المالكين**.
-- التحقق: 74 اختباراً نطاقياً عبر shim. ruff/mypy وملفات HTTP لم تُشغَّل.
-
-### مصادقة Bearer (ADR-017 — PROPOSED، تنفيذ عام بلا مزوّد)
-
-- `domain/identity.py`: تحليل `Authorization: Bearer` ← `TokenVerifier` (التوقيع، قابل للاستبدال) ← فحص iss/aud/exp/nbf/سقف العمر ← ربط `(issuer, sub)` بمستخدم عالمي. كل الإخفاقات 401 بنفس الرسالة. لا إنشاء تلقائي لمستخدم مجهول.
-- `api/deps.py`: `BearerAuthenticator` (غير موصول في `create_app` حتى تُعتمد إعدادات issuer/audience).
-- `tests/helpers_jwt.py`: موقّع/متحقق HS256 **للاختبار فقط** (داخل tests/ فلا يُشحن).
-- **لا مكتبة تشفير أُضيفت** (تحديث `uv.lock` غير ممكن دون شبكة). التحقق الحقيقي من RS256/JWKS يحتاج مكتبة وقرار المزوّد.
-- التحقق: 79 اختباراً نطاقياً عبر shim؛ `test_bearer_api.py` لم يُشغَّل.
-
-### Auth0 (RS256 + JWKS) — موصول
-
-- `domain/rs256.py`: تحقق RS256 بمكتبة stdlib فقط (عمليات المفتاح العام فقط؛ alg=RS256 صارم، kid إلزامي، مفتاح ≥ 2048 بت، e ≥ 65537، مقارنة الحشو بالكتلة كاملة). **تحقق تشفيري مكتوب يدوياً: يُنصح باستبداله بـ PyJWT عند تحديث `uv.lock` ومراجعته أمنياً.**
-- `api/jwks.py`: جلب JWKS من `{issuer}.well-known/jwks.json` (https فقط، حد 256KB، cache ساعة، تحديث عند kid مجهول مرة/دقيقة، يفشل مغلقاً).
-- `config.py`: `MOALLEM_AUTH_ISSUER` / `AUDIENCE` / `MAX_TOKEN_LIFETIME_SECONDS` (الثلاثة معاً أو لا شيء). `create_app` يستعمل `BearerAuthenticator` عند ضبطها.
-- `DerivedSubjectMapper`: user_id = UUIDv5(issuer|sub) (مطابق لصيغة uuid في العقد، بلا جدول). لا يمنح صلاحية؛ العضوية ما زالت مطلوبة. **قرار قابل للتراجع:** تغيير issuer يغيّر المعرّفات.
-- **تنبيه Auth0:** عمر access token الافتراضي للـ API هو 86400 ثانية؛ اخفضه في Auth0 ليطابق السقف (مثلاً 900) وإلا سيُرفض كل توكن.
-- التحقق: 90 اختباراً (نطاق + JWKS) عبر shim. لم تُشغَّل: اختبارات config/HTTP وruff/mypy.
-
-## P2-03 — عزل cache / storage / worker (إضافة)
-
-- `domain/tenant_keys.py`: مفاتيح cache ومسارات storage وغلاف رسائل الطابور تُبنى **من `ActiveContext` فقط**؛ المؤسسة جزء من المفتاح بالبناء، والمقاطع تُرفض إن احتوت `/` أو `:` أو `..` أو فراغاً. مفتاح/مسار/رسالة تخص مؤسسة أخرى = `ResourceNotFound` (AT-015).
-- `tests/domain/test_tenant_keys.py`.
-- **ما لا يغطيه:** لا Redis ولا S3 ولا broker فعلي بعد (ADR-020, DEC-030)؛ هذه هي الواجهة التي يجب أن تلتزم بها تلك الطبقات. اختبارات DB (`DB-TEN-01`) تنتظر DEC-031.
-- ربط Moodle بالعضوية والصلاحية: `moodle/service.py` (انظر `PHASE3_STATUS.md`).
+**Do not mark P2 CLOSED** until the owners resolve the open decisions and the blocked persistence,
+secret-management, and infrastructure evidence is available.

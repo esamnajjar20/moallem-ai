@@ -1,15 +1,9 @@
 # P1 — Repository Foundation: closure status
 
-> **Update (this snapshot):** `mobile/pubspec.lock`, `mobile/android/` and `mobile/ios/` are now
-> present, with a consistent bundle id (`com.moallem.mobile`) and Flutter 3.50.0 pins. This was
-> checked by inspecting the files only. **Flutter was not run** (not installed here), so
-> analyze/test/build are still unverified, and the table below predates this update. P1 stays
-> NOT CLOSED until a green GitHub Actions run exists. The `com.moallem` prefix is still
-> provisional.
-
-**Status: NOT CLOSED.** Backend foundations exist and the source test suite passes, but the
-mobile lockfile/native projects are not yet present and no GitHub Actions run has demonstrated a
-green end-to-end repository gate.
+**Status: NOT CLOSED.** Locked backend and Flutter checks were executed locally, and the Android
+debug APK build passed with Gradle caches and outputs on temporary storage. No GitHub Actions run
+has demonstrated a green end-to-end gate; iOS still requires the macOS CI runner. The
+`com.moallem` application ID remains provisional and unchanged.
 
 **Assessment date:** 2026-11-16  
 **Baseline:** `09_Implementation_Roadmap_v2.0` in Engineering Documentation v2.4  
@@ -19,20 +13,22 @@ green end-to-end repository gate.
 
 | ID | Requirement | Current state | Evidence / remaining work |
 |---|---|---|---|
-| P1-01 | API, Worker and Flutter skeleton | PARTIAL | FastAPI and Worker skeletons plus Flutter RTL shell exist. `backend/uv.lock` is committed. Flutter is now pinned to 3.50.0, but `mobile/pubspec.lock`, `mobile/android/`, and `mobile/ios/` are still missing. Run `scripts/bootstrap_mobile.sh` on a machine with Flutter 3.50.0 and commit its generated outputs. |
-| P1-02 | CI gates | CONFIGURED / NOT VERIFIED | CI now pins GitHub Actions to immutable commit SHAs and defines Backend, Android, iOS, and secret-scan jobs. It has not been run by GitHub for this uploaded snapshot. CI intentionally fails mobile prerequisites until the Flutter lockfile and native runners are committed. |
+| P1-01 | API, Worker and Flutter skeleton | IMPLEMENTED / LOCALLY VERIFIED | Python 3.12.16 locked checks pass; Flutter lockfile and Android/iOS runners exist. Flutter 3.50.0 format, analysis, tests, and debug APK build pass. The application ID stays provisional. |
+| P1-02 | CI gates | CONFIGURED / NOT VERIFIED | CI pins actions to immutable commit SHAs and defines Backend, Android, iOS, and Secret Scan jobs. YAML parsed locally; `actionlint` is unavailable. A GitHub run is still required. |
 | P1-03 | Config, health and readiness | IMPLEMENTED | `config.py` validates configuration fail-fast; `/healthz` and `/readyz` exist; structured JSON logging redacts sensitive values and carries request IDs. API/config/logging tests are included. |
 
 ## Verification evidence
 
 | Check | Result | Qualification |
 |---|---|---|
-| Backend tests | **82 passed** | Re-run in this environment with `python3 -m pytest -q`; runtime Python was 3.13.5, while the project contract is Python 3.12.x. This is a useful source-level smoke test, not the pinned-toolchain gate. |
-| Ruff format/check | Historical status says passed | The previous `PHASE1_STATUS` recorded 39 files unchanged and Ruff clean. Ruff is not installed in the current execution environment, so that result was not independently repeated here. |
-| mypy strict | Historical status says 24 source files passed | The previous status file recorded success; ADR-016 text was inconsistent and has been corrected. mypy is not installed in the current execution environment, so the check was not independently repeated here. |
-| Backend locked sync/build/audit | NOT VERIFIED HERE | Python 3.12.16 and dependency tools could not be downloaded because this execution environment has no DNS/network access. CI now runs these checks with a pinned interpreter and uv. |
-| Flutter format/analyze/tests/builds | NOT RUN | Flutter and Dart are not installed in this environment. A repeatable bootstrap script and pinned CI jobs are provided. |
-| GitHub Actions | NOT RUN | A workflow file is not evidence of a passing workflow run. A push/PR to the actual GitHub repository is required. |
+| Backend locked sync | **PASS** | `cd backend && uv sync --locked`; Python 3.12.16, uv 0.13.8. |
+| Ruff format/check | **PASS** | `ruff format --check .` and `ruff check .`; Ruff 0.17.5. |
+| mypy | **PASS** | `uv run --locked mypy`; mypy 1.20.2, 39 source files, no issues. |
+| Backend tests | **PASS** | `uv run --locked pytest -ra`; **314 passed, 1 Starlette/httpx deprecation warning**. Includes all requested HTTP test files. |
+| Backend build/audit | **PASS WITH AUDIT QUALIFICATION** | `uv build` built sdist and wheel. `pip-audit` found no known vulnerabilities; it skipped local `moallem 0.0.1` because it is not on PyPI. |
+| Flutter pub/format/analyze/tests | **PASS** | Flutter 3.50.0 / Dart 3.14.0; enforced-lockfile pub get succeeded, 6 Dart files unchanged, analyze clean, **3 tests passed**. |
+| Android debug APK | **PASS** | `flutter build apk --debug` succeeded with `GRADLE_USER_HOME=/tmp/moallem-gradle-user-home`; APK: `/tmp/moallem-gradle-project-build/app/outputs/flutter-apk/app-debug.apk` (129,067,034 bytes; ZIP integrity check passed). |
+| GitHub Actions | **NOT RUN** | YAML parses and lists four jobs; `actionlint` is not installed. A PR and green GitHub run are still required. |
 
 ## Toolchain pins added
 
@@ -40,7 +36,7 @@ green end-to-end repository gate.
 - Backend uv in CI: `0.13.6` (via the pinned `astral-sh/setup-uv` action).
 - Mobile Flutter: `mobile/.flutter-version` and `mobile/.fvmrc` = `3.50.0`.
 - Mobile Dart: supplied by Flutter 3.50.0 (Dart 3.14.0).
-- Flutter package versions remain locked only after `flutter pub get` creates and commits `mobile/pubspec.lock`.
+- `mobile/pubspec.lock` exists; `flutter pub get --enforce-lockfile` succeeds without changing dependency versions.
 
 ## CI hardening applied
 
@@ -50,15 +46,17 @@ green end-to-end repository gate.
 - iOS runs format, analysis, tests and an unsigned release build on macOS.
 - Both mobile jobs fail clearly when the lockfile or committed platform runners are missing.
 
-## One-time mobile bootstrap
+## Mobile bootstrap evidence
 
-From the repository root, on a machine with Flutter 3.50.0 installed:
+`mobile/pubspec.lock`, `mobile/android/`, and `mobile/ios/` are present, and
+`./scripts/check_mobile_prerequisites.sh` passes with Flutter 3.50.0. The bootstrap command remains
+available for regenerating these files on a compatible setup:
 
 ```bash
 ./scripts/bootstrap_mobile.sh
 ```
 
-Then review and commit:
+Review and commit generated files only when deliberately regenerating them:
 
 ```text
 mobile/pubspec.lock
@@ -72,9 +70,8 @@ publisher identity has been decided. Do not ship until the identifier is confirm
 
 ## Remaining P1 technical exit actions
 
-1. Run the one-time Flutter bootstrap and commit the generated lockfile and Android/iOS runners.
-2. Run `uv sync --locked`, `make check`, and the mobile checks using the pinned toolchains.
-3. Push the updated repository and obtain a successful GitHub Actions run for all four jobs.
+1. Run the iOS build on macOS CI.
+2. Open a PR and obtain a successful GitHub Actions run for Backend, Android, iOS, and Secret Scan.
 
 **Do not mark the P1 technical gate CLOSED until all three actions have evidence.** ADR-015 and
 ADR-016 owner approvals remain separate foundation-governance work and must be completed before
