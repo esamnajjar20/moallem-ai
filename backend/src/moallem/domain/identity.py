@@ -77,9 +77,10 @@ def validate_claims(
         raise AuthenticationRequired(_FAIL)
     if claims.not_before is not None and now + leeway_seconds < claims.not_before:
         raise AuthenticationRequired(_FAIL)
-    if max_lifetime_seconds is not None:
-        if claims.issued_at is None or claims.expires_at - claims.issued_at > max_lifetime_seconds:
-            raise AuthenticationRequired(_FAIL)
+    if max_lifetime_seconds is not None and (
+        claims.issued_at is None or claims.expires_at - claims.issued_at > max_lifetime_seconds
+    ):
+        raise AuthenticationRequired(_FAIL)
 
 
 def _bearer_token(header: str | None) -> str:

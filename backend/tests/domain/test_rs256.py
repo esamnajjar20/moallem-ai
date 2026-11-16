@@ -93,7 +93,7 @@ def test_all_bad_tokens_are_the_same_401() -> None:
 
 def test_missing_kid_is_rejected() -> None:
     token = sign_rs256(_p())
-    head, body, sig = token.split(".")
+    _head, body, sig = token.split(".")
     nokid = b64(b'{"alg":"RS256","typ":"JWT"}')
     with pytest.raises(AuthenticationRequired):
         Rs256Verifier(JWKS).verify(f"{nokid}.{body}.{sig}")

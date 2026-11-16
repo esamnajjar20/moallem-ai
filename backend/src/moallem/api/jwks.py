@@ -2,6 +2,7 @@
 from a token. HTTPS only, small response cap, rate-limited refresh on unknown `kid`.
 """
 
+import contextlib
 import json
 import threading
 import time
@@ -54,10 +55,8 @@ class UrlJwks:
         self._lock = threading.Lock()
 
     def _refresh(self) -> None:
-        try:
+        with contextlib.suppress(OSError, ValueError):
             self._keys = parse_jwks(json.loads(self._fetch(self._url, self._timeout)))
-        except (OSError, ValueError):
-            pass  # keep the previous keys; verification fails closed if there are none
         self._fetched_at = self._clock()  # also on failure: bounds retry rate
 
     def key_for(self, kid: str) -> RsaPublicKey | None:
