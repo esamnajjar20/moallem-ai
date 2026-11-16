@@ -1,9 +1,9 @@
 """Fail-closed HTTP placeholders for Moodle course reads."""
 
-from typing import Annotated, Never
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, Path, Query, Request
 
 from moallem.api.deps import get_membership_repo, get_user_id
 from moallem.domain.membership import (
@@ -12,6 +12,7 @@ from moallem.domain.membership import (
     resolve_active_context,
 )
 from moallem.moodle.errors import MoodleUnavailable
+from moallem.moodle.service import MoodleReadService
 
 router = APIRouter(tags=["courses"])
 
@@ -28,13 +29,14 @@ def get_course_active_context(
     )
 
 
-def require_connection_repository(
+def get_moodle_read_service(
     request: Request,
     _context: Annotated[ActiveContext, Depends(get_course_active_context)],
-) -> None:
-    if getattr(request.app.state, "moodle_connection_repository", None) is None:
-        raise MoodleUnavailable("Moodle connection repository is not configured.")
-    raise MoodleUnavailable("Moodle course reads are not configured.")
+) -> MoodleReadService:
+    service = getattr(request.app.state, "moodle_read_service", None)
+    if not isinstance(service, MoodleReadService):
+        raise MoodleUnavailable("Moodle read service is not configured.")
+    return service
 
 
 @router.get(
@@ -43,13 +45,24 @@ def require_connection_repository(
     response_model=None,
     responses={503: {"description": "Moodle connection repository unavailable"}},
 )
-async def list_courses(
-    _repository: Annotated[None, Depends(require_connection_repository)],
+def list_courses(
+    service: Annotated[MoodleReadService, Depends(get_moodle_read_service)],
+    context: Annotated[ActiveContext, Depends(get_course_active_context)],
     connection_id: UUID,
-    cursor: str | None = None,
+    cursor: Annotated[str | None, Query(max_length=256)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
-) -> Never:
-    raise MoodleUnavailable("Moodle course reads are not configured.")
+) -> dict[str, Any]:
+    page = service.list_courses(
+        context,
+        str(connection_id),
+        cursor=cursor,
+        page_size=limit,
+    )
+    return {
+        "items": [item.to_dict() for item in page.items],
+        "has_more": page.has_more,
+        "next_cursor": page.next_cursor,
+    }
 
 
 @router.get(
@@ -58,9 +71,15 @@ async def list_courses(
     response_model=None,
     responses={503: {"description": "Moodle connection repository unavailable"}},
 )
-async def get_course_context(
-    course_id: str,
-    _repository: Annotated[None, Depends(require_connection_repository)],
+def get_course_context(
+    course_id: Annotated[str, Path(min_length=1, max_length=128)],
+    service: Annotated[MoodleReadService, Depends(get_moodle_read_service)],
+    context: Annotated[ActiveContext, Depends(get_course_active_context)],
     connection_id: UUID,
-) -> Never:
-    raise MoodleUnavailable("Moodle course reads are not configured.")
+) -> dict[str, Any]:
+    contents = service.course_contents(context, str(connection_id), course_id)
+    return {
+        "course_id": contents.course_id,
+        "sections": [section.to_dict() for section in contents.sections],
+        "source_refs": [],
+    }

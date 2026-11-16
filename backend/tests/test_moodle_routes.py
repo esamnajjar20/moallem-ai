@@ -7,11 +7,21 @@ from fastapi.testclient import TestClient
 
 from moallem.api.app import create_app
 from moallem.config import Settings
+from moallem.domain.authorization import StaticPolicy
 from moallem.domain.membership import (
+    ActiveContext,
     InMemoryMembershipRepository,
     Membership,
     MembershipStatus,
 )
+from moallem.domain.secrets import InMemoryVault
+from moallem.moodle.service import (
+    ConnectionStatus,
+    MoodleConnection,
+    MoodleReadService,
+    new_connection_repository,
+)
+from tests.moodle.fakes import PUBLIC, FakeResolver, FakeTransport
 
 _CONTRACT = Path(__file__).resolve().parents[2] / "contracts" / "openapi.draft.yaml"
 _USER_ID = str(uuid.uuid4())
@@ -93,3 +103,72 @@ def test_course_read_routes_require_membership_context_header() -> None:
     )
     assert response.status_code == 400
     assert response.json()["code"] in {"MEMBERSHIP_CONTEXT_REQUIRED", "VALIDATION_FAILED"}
+
+
+def test_course_routes_call_moodle_read_service() -> None:
+    client, headers = _client()
+    context = ActiveContext(_USER_ID, _MEMBERSHIP_ID, _TENANT_ID, ("TEACHER",))
+    connection_id = str(uuid.uuid4())
+    vault = InMemoryVault()
+    secret_ref = vault.put(context, "synthetic-token")
+    connections = new_connection_repository()
+    connections.add(
+        context,
+        MoodleConnection(
+            connection_id=connection_id,
+            tenant_id=_TENANT_ID,
+            site_url="https://moodle.example.edu",
+            secret_ref=secret_ref,
+            status=ConnectionStatus.ACTIVE,
+            moodle_user_id=42,
+        ),
+    )
+    transport = FakeTransport()
+    transport.json_for(
+        "core_enrol_get_users_courses",
+        [{"id": 8, "fullname": "Math", "shortname": "MATH", "visible": 1}],
+    )
+    transport.json_for(
+        "core_course_get_contents",
+        [
+            {
+                "id": 2,
+                "name": "Week 1",
+                "visible": 1,
+                "summary": "<p>Introduction</p>",
+                "modules": [{"id": 3, "modname": "resource", "name": "Reading", "visible": 1}],
+            }
+        ],
+    )
+    service = MoodleReadService(
+        connections=connections,
+        vault=vault,
+        policy=StaticPolicy(
+            {"TEACHER": frozenset({"moodle.course.read", "moodle.course.content.read"})}
+        ),
+        transport=transport,
+        resolver=FakeResolver(PUBLIC),
+    )
+    app = create_app(
+        Settings(env="test", _env_file=None),
+        checks=[],
+        membership_repo=client.app.state.membership_repo,
+        moodle_read_service=service,
+    )
+    client = TestClient(app)
+    courses = client.get(
+        f"/courses?connection_id={connection_id}",
+        headers=headers,
+    )
+    contents = client.get(
+        f"/courses/8/context?connection_id={connection_id}",
+        headers=headers,
+    )
+
+    assert courses.status_code == 200
+    assert courses.json()["items"][0]["course_id"] == "8"
+    assert courses.json()["items"][0]["fullname"] == "Math"
+    assert contents.status_code == 200
+    assert contents.json()["course_id"] == "8"
+    assert contents.json()["sections"][0]["summary"] == "Introduction"
+    assert contents.json()["source_refs"] == []
