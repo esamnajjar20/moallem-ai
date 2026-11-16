@@ -1,33 +1,38 @@
-"""RS256 JWT verification, stdlib only (ADR-017 / Auth0). Public-key operations only.
+"""RS256 JWT verification using PyJWT and cryptography.
 
-Strictness: alg must be exactly RS256 (no `none`, no HS*), `kid` is required and must resolve to
-a known RSA key of >= 2048 bits, and the PKCS#1 v1.5 padding is checked by comparing the WHOLE
-expected encoded block (no padding parsing). Claim *policy* (iss/aud/exp...) is in identity.py.
-If `PyJWT`/`cryptography` is later added to the lock, this module can be swapped behind
-TokenVerifier without touching callers.
+The verifier pins RS256, requires a known RSA signing key of at least 2048 bits, and returns
+uniform authentication failures. Claim policy remains in ``identity.py`` so tests can use a
+controlled clock.
 """
 
 import base64
-import hashlib
-import hmac
-import json
+import binascii
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
+
+import jwt
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from moallem.domain.errors import AuthenticationRequired
 from moallem.domain.identity import Claims
 
 _FAIL = "authentication required"
-_SHA256_PREFIX = bytes.fromhex("3031300d060960864801650304020105000420")
 _MIN_BITS = 2048
 _MIN_EXPONENT = 65537
+_MAX_TOKEN_BYTES = 128 * 1024
+_B64URL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
 
 @dataclass(frozen=True, slots=True)
 class RsaPublicKey:
     n: int
     e: int
+
+    def to_cryptography_key(self) -> rsa.RSAPublicKey:
+        return rsa.RSAPublicNumbers(self.e, self.n).public_key()
 
 
 class JwksProvider(Protocol):
@@ -43,52 +48,53 @@ class StaticJwks:
 
 
 def _unb64(text: str) -> bytes:
-    if not text or any(c not in _B64URL for c in text):
-        raise ValueError("bad base64url")
+    if not text or any(char not in _B64URL for char in text):
+        raise ValueError("invalid base64url")
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
-_B64URL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
-
-
 def parse_jwks(document: object) -> dict[str, RsaPublicKey]:
-    """Extract usable RSA signing keys from a JWKS document; silently skip anything else."""
+    """Keep only sufficiently strong RSA signing keys with valid public parameters."""
     keys: dict[str, RsaPublicKey] = {}
     items = document.get("keys") if isinstance(document, dict) else None
-    for jwk in items if isinstance(items, list) else []:
+    for jwk_data in items if isinstance(items, list) else []:
+        if not isinstance(jwk_data, dict):
+            continue
         try:
-            if jwk.get("kty") != "RSA" or jwk.get("use", "sig") != "sig":
+            if jwk_data.get("kty") != "RSA" or jwk_data.get("use", "sig") != "sig":
                 continue
-            if jwk.get("alg", "RS256") != "RS256" or not isinstance(jwk.get("kid"), str):
+            if jwk_data.get("alg", "RS256") != "RS256":
+                continue
+            kid = jwk_data["kid"]
+            if not isinstance(kid, str) or not kid or len(kid) > 256:
                 continue
             key = RsaPublicKey(
-                int.from_bytes(_unb64(jwk["n"]), "big"), int.from_bytes(_unb64(jwk["e"]), "big")
+                int.from_bytes(_unb64(jwk_data["n"]), "big"),
+                int.from_bytes(_unb64(jwk_data["e"]), "big"),
             )
-        except (ValueError, KeyError, TypeError, AttributeError):
+            if key.n.bit_length() < _MIN_BITS or key.e < _MIN_EXPONENT or key.e % 2 == 0:
+                continue
+            key.to_cryptography_key()
+        except (ValueError, KeyError, TypeError, binascii.Error):
             continue
-        if key.n.bit_length() >= _MIN_BITS and key.e >= _MIN_EXPONENT and key.e % 2 == 1:
-            keys[jwk["kid"]] = key
+        keys[kid] = key
     return keys
 
 
 def rsa_pkcs1_sha256_verify(key: RsaPublicKey, message: bytes, signature: bytes) -> bool:
-    k = (key.n.bit_length() + 7) // 8
-    if len(signature) != k:
+    """Compatibility helper backed by cryptography; no hand-written RSA verification."""
+    try:
+        key.to_cryptography_key().verify(signature, message, padding.PKCS1v15(), hashes.SHA256())
+    except (InvalidSignature, ValueError):
         return False
-    s = int.from_bytes(signature, "big")
-    if s >= key.n:
-        return False
-    encoded = pow(s, key.e, key.n).to_bytes(k, "big")
-    t = _SHA256_PREFIX + hashlib.sha256(message).digest()
-    expected = b"\x00\x01" + b"\xff" * (k - len(t) - 3) + b"\x00" + t
-    return hmac.compare_digest(encoded, expected)
+    return True
 
 
 def _number(value: Any) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueError("not a number")
+        raise ValueError("invalid numeric claim")
     return float(value)
 
 
@@ -98,29 +104,59 @@ class Rs256Verifier:
 
     def verify(self, token: str) -> Claims:
         try:
-            head_b, body_b, sig_b = token.split(".")
-            head = json.loads(_unb64(head_b))
-            if head.get("alg") != "RS256" or not isinstance(head.get("kid"), str):
-                raise ValueError("alg/kid")
-            key = self._jwks.key_for(head["kid"])
+            if not token or len(token.encode("utf-8")) > _MAX_TOKEN_BYTES:
+                raise ValueError("invalid token size")
+            header = jwt.get_unverified_header(token)
+            if (
+                header.get("alg") != "RS256"
+                or not isinstance(header.get("kid"), str)
+                or not header["kid"]
+                or header.get("crit") not in (None, [])
+                or header.get("b64") is False
+            ):
+                raise ValueError("unsupported JWT header")
+            key = self._jwks.key_for(header["kid"])
             if key is None:
-                raise ValueError("unknown kid")
-            if not rsa_pkcs1_sha256_verify(key, f"{head_b}.{body_b}".encode(), _unb64(sig_b)):
-                raise ValueError("signature")
-            p = json.loads(_unb64(body_b))
-            aud = p.get("aud", [])
-            aud_t = (aud,) if isinstance(aud, str) else tuple(aud)
-            if not all(isinstance(a, str) for a in aud_t):
-                raise ValueError("aud")
-            if not isinstance(p["iss"], str) or not isinstance(p["sub"], str):
-                raise ValueError("iss/sub")
-            return Claims(
-                issuer=p["iss"],
-                subject=p["sub"],
-                audience=aud_t,
-                expires_at=_number(p.get("exp")),
-                not_before=_number(p.get("nbf")),
-                issued_at=_number(p.get("iat")),
+                raise ValueError("unknown key")
+            claims = jwt.decode(
+                token,
+                key.to_cryptography_key(),
+                algorithms=["RS256"],
+                options={
+                    "require": ["iss", "sub"],
+                    "verify_aud": False,
+                    "verify_exp": False,
+                    "verify_iat": False,
+                    "verify_nbf": False,
+                    "verify_iss": False,
+                },
             )
-        except (ValueError, KeyError, TypeError, AttributeError) as exc:
+            issuer = claims.get("iss")
+            subject = claims.get("sub")
+            audience = claims.get("aud", [])
+            if isinstance(audience, str):
+                audiences = (audience,)
+            elif isinstance(audience, list) and all(isinstance(item, str) for item in audience):
+                audiences = tuple(audience)
+            else:
+                raise ValueError("invalid audience claim")
+            if not isinstance(issuer, str) or not isinstance(subject, str):
+                raise ValueError("invalid identity claims")
+            return Claims(
+                issuer=issuer,
+                subject=subject,
+                audience=audiences,
+                expires_at=_number(claims.get("exp")),
+                not_before=_number(claims.get("nbf")),
+                issued_at=_number(claims.get("iat")),
+            )
+        except (
+            jwt.PyJWTError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            OverflowError,
+            binascii.Error,
+        ) as exc:
             raise AuthenticationRequired(_FAIL) from exc
