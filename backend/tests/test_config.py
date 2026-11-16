@@ -47,3 +47,25 @@ def test_secrets_never_appear_in_repr_or_summary(monkeypatch: pytest.MonkeyPatch
     assert "topsecret" not in repr(s)
     assert "topsecret" not in str(s.safe_summary())
     assert s.safe_summary()["database_url_set"] is True
+
+
+def test_auth_settings_are_all_or_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOALLEM_AUTH_ISSUER", "https://t.auth0.com/")
+    with pytest.raises(ConfigError):
+        load_settings()
+    monkeypatch.setenv("MOALLEM_AUTH_AUDIENCE", "api")
+    monkeypatch.setenv("MOALLEM_AUTH_MAX_TOKEN_LIFETIME_SECONDS", "900")
+    s = load_settings()
+    assert s.safe_summary()["auth_configured"] is True
+
+
+def test_auth_issuer_must_be_https_and_lifetime_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOALLEM_AUTH_ISSUER", "http://t.auth0.com/")
+    monkeypatch.setenv("MOALLEM_AUTH_AUDIENCE", "api")
+    monkeypatch.setenv("MOALLEM_AUTH_MAX_TOKEN_LIFETIME_SECONDS", "900")
+    with pytest.raises(ConfigError):
+        load_settings()
+    monkeypatch.setenv("MOALLEM_AUTH_ISSUER", "https://t.auth0.com/")
+    monkeypatch.setenv("MOALLEM_AUTH_MAX_TOKEN_LIFETIME_SECONDS", "5")
+    with pytest.raises(ConfigError):
+        load_settings()

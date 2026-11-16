@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     database_url: SecretStr | None = None
     redis_url: SecretStr | None = None
     readiness_timeout_seconds: float = 2.0
+    # ADR-017 (PROPOSED, Auth0). All three or none: no defaults for security values.
+    auth_issuer: str | None = None  # e.g. https://<tenant>.auth0.com/  (keep trailing slash)
+    auth_audience: str | None = None  # Auth0 API identifier
+    auth_max_token_lifetime_seconds: int | None = None
 
     @field_validator("readiness_timeout_seconds")
     @classmethod
@@ -70,6 +74,20 @@ class Settings(BaseSettings):
         if v is not None and urlsplit(v.get_secret_value()).scheme not in _REDIS_SCHEMES:
             raise ValueError("unsupported redis URL scheme")
         return v
+
+    @model_validator(mode="after")
+    def _auth_all_or_none(self) -> Self:
+        fields = (self.auth_issuer, self.auth_audience, self.auth_max_token_lifetime_seconds)
+        if any(v is not None for v in fields) and not all(v is not None for v in fields):
+            raise ValueError(
+                "auth_issuer, auth_audience and auth_max_token_lifetime_seconds go together"
+            )
+        if self.auth_issuer is not None and urlsplit(self.auth_issuer).scheme != "https":
+            raise ValueError("auth_issuer must be an https URL")
+        lifetime = self.auth_max_token_lifetime_seconds
+        if lifetime is not None and not 60 <= lifetime <= 86400:
+            raise ValueError("auth_max_token_lifetime_seconds must be 60..86400")
+        return self
 
     @model_validator(mode="after")
     def _require_backing_services_outside_dev(self) -> Self:
@@ -94,6 +112,7 @@ class Settings(BaseSettings):
             "database_url_set": self.database_url is not None,
             "redis_url_set": self.redis_url is not None,
             "readiness_timeout_seconds": self.readiness_timeout_seconds,
+            "auth_configured": self.auth_issuer is not None,
         }
 
 

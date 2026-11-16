@@ -2,7 +2,11 @@ import uuid
 
 import pytest
 
-from moallem.domain.errors import MembershipContextInvalid, MembershipContextRequired
+from moallem.domain.errors import (
+    MembershipContextInvalid,
+    MembershipContextMalformed,
+    MembershipContextRequired,
+)
 from moallem.domain.membership import (
     InMemoryMembershipRepository,
     Membership,
@@ -41,11 +45,24 @@ def test_missing_or_blank_header_is_required_error() -> None:
 
 def test_malformed_unknown_foreign_suspended_revoked_are_indistinguishable() -> None:
     errors = []
-    for h in ("not-a-uuid", str(uuid.uuid4()), M_FOREIGN, M_SUSP, M_REV):
+    for h in (str(uuid.uuid4()), M_FOREIGN, M_SUSP, M_REV):
         with pytest.raises(MembershipContextInvalid) as ei:
             _resolve(h)
         errors.append((ei.value.code, str(ei.value), ei.value.http_status))
     assert len(set(errors)) == 1  # no membership enumeration
+    assert errors[0][2] == 403  # DEC-039: invalid context is 403, missing header is 400
+
+
+def test_missing_header_is_400() -> None:
+    with pytest.raises(MembershipContextRequired) as ei:
+        _resolve(None)
+    assert ei.value.http_status == 400
+
+
+def test_malformed_header_is_a_400_format_error_not_403() -> None:
+    with pytest.raises(MembershipContextMalformed) as ei:
+        _resolve("not-a-uuid")
+    assert (ei.value.http_status, ei.value.code.value) == (400, "VALIDATION_FAILED")
 
 
 def test_valid_context_derives_tenant_and_roles_server_side() -> None:  # AT-031/AT-037

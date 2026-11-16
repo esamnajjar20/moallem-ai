@@ -16,13 +16,21 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from moallem import __version__
-from moallem.api.deps import Authenticator, DevAuthenticator, NoAuthenticator
+from moallem.api.deps import (
+    Authenticator,
+    BearerAuthenticator,
+    DevAuthenticator,
+    NoAuthenticator,
+)
 from moallem.api.health import router as health_router
+from moallem.api.jwks import UrlJwks, jwks_url_for_issuer
 from moallem.api.me import router as me_router
 from moallem.api.schemas import ErrorDetails, ErrorEnvelope, FieldError
 from moallem.config import Environment, Settings, load_settings
 from moallem.domain.errors import DomainError
+from moallem.domain.identity import DerivedSubjectMapper
 from moallem.domain.membership import InMemoryMembershipRepository, MembershipRepository
+from moallem.domain.rs256 import Rs256Verifier
 from moallem.errors import ErrorCode
 from moallem.health.checks import Check, tcp_check
 from moallem.logging import configure_logging, request_id_var
@@ -144,7 +152,27 @@ def create_app(
     app.state.settings = settings
     if authenticator is None:
         dev = settings.env in {Environment.DEVELOPMENT, Environment.TEST}
-        authenticator = DevAuthenticator(settings.env) if dev else NoAuthenticator()
+        if settings.auth_issuer is not None:
+            # Validated all-or-none by Settings. Auth0 JWKS: ttl 1h, refresh gap 60s, 5s timeout.
+            assert settings.auth_audience is not None  # noqa: S101
+            assert settings.auth_max_token_lifetime_seconds is not None  # noqa: S101
+            authenticator = BearerAuthenticator(
+                Rs256Verifier(
+                    UrlJwks(
+                        jwks_url_for_issuer(settings.auth_issuer),
+                        ttl_seconds=3600,
+                        min_refresh_interval_seconds=60,
+                        timeout_seconds=5,
+                    )
+                ),
+                DerivedSubjectMapper(),
+                issuer=settings.auth_issuer,
+                audience=settings.auth_audience,
+                leeway_seconds=30,
+                max_lifetime_seconds=settings.auth_max_token_lifetime_seconds,
+            )
+        else:
+            authenticator = DevAuthenticator(settings.env) if dev else NoAuthenticator()
     app.state.authenticator = authenticator
     # Placeholder until P4 persistence; an empty repo means nobody has a membership (fail closed).
     app.state.membership_repo = membership_repo or InMemoryMembershipRepository()

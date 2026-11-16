@@ -69,3 +69,41 @@
 - `domain/outbox.py` + اختبارات: PENDING→LEASED→PUBLISHED/DEAD_LETTER، fencing بـ`lease_generation`، inbox dedup.
 - **بلا قيم افتراضية عمداً:** `ttl`، `max_attempts`، `retry_after`، ومفتاح HMAC الخادمي.
 - **غير منجز:** جداول PostgreSQL، المعاملة الواحدة، المُرسِل (dispatcher)، P4-04. كلها بعد DEC-030/031.
+
+## 8) P2 — الهوية والعضوية (جلسة 2026-11-16، تنفيذ جزئي ضمن المتاح)
+
+**P2 لا يُغلق من هنا:** ADR-017 وDEC-026/027/032 مفتوحة، وP2-02 محجوب (Secret Manager)، وP2-03 يحتاج قاعدة بيانات/worker/cache/storage غير موجودة بعد.
+
+| البند | الحالة | ما تغيّر |
+|---|---|---|
+| P2-01 | PARTIAL-CODE | `MembershipContextInvalid` صار **403** (DEC-039 في Planning_Closure_Decisions_v2.4)؛ الرأس المشوّه صار **400 VALIDATION_FAILED** (`MembershipContextMalformed`)؛ الغائب يبقى 400 `MEMBERSHIP_CONTEXT_REQUIRED`. |
+| P2-01/03 | جديد | `domain/authorization.py`: `require_tenant` (مورد مؤسسة أخرى = 404 بلا كشف وجود، AT-015) ثم `authorize` (سياسة صريحة؛ الافتراضي `DenyAllPolicy` لأن DEC-027 مفتوح). |
+| P2-03 | جزئي | اختبارات نطاقية للعزل بين المؤسسات + `tests/test_tenancy_api.py` (AT-037/AT-031/AT-015 عبر HTTP على مسار probe). **طبقات DB/worker/cache/storage غير مغطاة.** |
+
+**التحقق:** 65 اختباراً نطاقياً نجحت عبر shim محلي (بلا pytest). `tests/test_tenancy_api.py` **لم يُشغَّل** (لا fastapi/httpx في البيئة)، ولم يُشغَّل ruff/mypy.
+
+**تعارض وثائقي يحتاج قرار المالك:** `openapi.draft.yaml` يصف `BadRequest` بأنه يشمل «missing/invalid required request context» بينما Closure Decisions v2.4 يحدد 403 للعضوية غير الصالحة. نُفّذ ما في Closure Decisions؛ وصف `BadRequest` في OpenAPI لم يُعدَّل.
+
+### إضافة لاحقة (نفس الجلسة)
+
+- `domain/scoped.py`: مستودع مقيّد بالمؤسسة (كل عملية تتطلب `ActiveContext`) + `tests/domain/test_scoped.py`.
+- `domain/secrets.py`: `SecretRef` محجوب في repr/str/log + واجهة `SecretVault` + `tests/domain/test_secrets.py`. **اختيار Secret Manager ما زال مفتوحاً.**
+- `docs/P2_DECISION_PROPOSALS.md`: مقترحات ADR-017 وDEC-026/027/032 **بحالة PROPOSED، بانتظار توقيع المالكين**.
+- التحقق: 74 اختباراً نطاقياً عبر shim. ruff/mypy وملفات HTTP لم تُشغَّل.
+
+### مصادقة Bearer (ADR-017 — PROPOSED، تنفيذ عام بلا مزوّد)
+
+- `domain/identity.py`: تحليل `Authorization: Bearer` ← `TokenVerifier` (التوقيع، قابل للاستبدال) ← فحص iss/aud/exp/nbf/سقف العمر ← ربط `(issuer, sub)` بمستخدم عالمي. كل الإخفاقات 401 بنفس الرسالة. لا إنشاء تلقائي لمستخدم مجهول.
+- `api/deps.py`: `BearerAuthenticator` (غير موصول في `create_app` حتى تُعتمد إعدادات issuer/audience).
+- `tests/helpers_jwt.py`: موقّع/متحقق HS256 **للاختبار فقط** (داخل tests/ فلا يُشحن).
+- **لا مكتبة تشفير أُضيفت** (تحديث `uv.lock` غير ممكن دون شبكة). التحقق الحقيقي من RS256/JWKS يحتاج مكتبة وقرار المزوّد.
+- التحقق: 79 اختباراً نطاقياً عبر shim؛ `test_bearer_api.py` لم يُشغَّل.
+
+### Auth0 (RS256 + JWKS) — موصول
+
+- `domain/rs256.py`: تحقق RS256 بمكتبة stdlib فقط (عمليات المفتاح العام فقط؛ alg=RS256 صارم، kid إلزامي، مفتاح ≥ 2048 بت، e ≥ 65537، مقارنة الحشو بالكتلة كاملة). **تحقق تشفيري مكتوب يدوياً: يُنصح باستبداله بـ PyJWT عند تحديث `uv.lock` ومراجعته أمنياً.**
+- `api/jwks.py`: جلب JWKS من `{issuer}.well-known/jwks.json` (https فقط، حد 256KB، cache ساعة، تحديث عند kid مجهول مرة/دقيقة، يفشل مغلقاً).
+- `config.py`: `MOALLEM_AUTH_ISSUER` / `AUDIENCE` / `MAX_TOKEN_LIFETIME_SECONDS` (الثلاثة معاً أو لا شيء). `create_app` يستعمل `BearerAuthenticator` عند ضبطها.
+- `DerivedSubjectMapper`: user_id = UUIDv5(issuer|sub) (مطابق لصيغة uuid في العقد، بلا جدول). لا يمنح صلاحية؛ العضوية ما زالت مطلوبة. **قرار قابل للتراجع:** تغيير issuer يغيّر المعرّفات.
+- **تنبيه Auth0:** عمر access token الافتراضي للـ API هو 86400 ثانية؛ اخفضه في Auth0 ليطابق السقف (مثلاً 900) وإلا سيُرفض كل توكن.
+- التحقق: 90 اختباراً (نطاق + JWKS) عبر shim. لم تُشغَّل: اختبارات config/HTTP وruff/mypy.

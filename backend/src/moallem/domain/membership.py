@@ -11,7 +11,11 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
 
-from moallem.domain.errors import MembershipContextInvalid, MembershipContextRequired
+from moallem.domain.errors import (
+    MembershipContextInvalid,
+    MembershipContextMalformed,
+    MembershipContextRequired,
+)
 
 
 class MembershipStatus(StrEnum):
@@ -66,7 +70,7 @@ def resolve_active_context(
     try:
         canonical = str(uuid.UUID(header_value.strip()))
     except ValueError as exc:
-        raise MembershipContextInvalid("invalid membership context") from exc
+        raise MembershipContextMalformed("malformed membership context") from exc
     m = repo.get(canonical)
     # Unknown, someone else's, suspended and revoked all look identical to the caller:
     # no membership enumeration.
