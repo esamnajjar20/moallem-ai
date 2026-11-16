@@ -11,10 +11,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_localizations:
-    sdk: flutter
   # ADR-015 remains provisional; P1 only needs a testable provider container.
   flutter_riverpod: ^2.6.1
+  material_ui: ^1.11.1
 
 dev_dependencies:
   flutter_test:

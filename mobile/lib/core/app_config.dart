@@ -7,8 +7,9 @@ class AppConfig {
 
   final Uri apiBaseUrl;
 
-  static const String _rawBaseUrl =
-      String.fromEnvironment('MOALLEM_API_BASE_URL');
+  static const String _rawBaseUrl = String.fromEnvironment(
+    'MOALLEM_API_BASE_URL',
+  );
 
   /// Fails fast: throws [StateError] on a missing or malformed base URL.
   factory AppConfig.fromEnvironment() => AppConfig.parse(_rawBaseUrl);
