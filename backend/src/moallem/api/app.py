@@ -4,6 +4,7 @@ Run: uvicorn --factory moallem.api.app:create_app
 Invalid configuration aborts startup (fail fast) before the server accepts traffic.
 """
 
+import asyncio
 import logging
 import re
 import uuid
@@ -13,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from moallem import __version__
@@ -32,9 +34,16 @@ from moallem.domain.identity import DerivedSubjectMapper
 from moallem.domain.membership import InMemoryMembershipRepository, MembershipRepository
 from moallem.domain.rs256 import Rs256Verifier
 from moallem.errors import ErrorCode
-from moallem.health.checks import Check, tcp_check
+from moallem.health.checks import Check, CheckResult, tcp_check
 from moallem.logging import configure_logging, request_id_var
 from moallem.moodle.routes import router as moodle_router
+from moallem.moodle.service import MoodleReadService
+from moallem.persistence.database import SessionFactory, check_database, create_database
+from moallem.persistence.repositories import (
+    PostgresMembershipRepository,
+    PostgresSubjectMapper,
+    new_postgres_connection_repository,
+)
 
 log = logging.getLogger("moallem.api")
 
@@ -111,20 +120,34 @@ def create_app(
     checks: Sequence[Check] | None = None,
     authenticator: Authenticator | None = None,
     membership_repo: MembershipRepository | None = None,
+    moodle_read_service: MoodleReadService | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     configure_logging(settings.log_level.value, service="moallem-api", env=settings.env.value)
 
+    db_engine = None
+    db_sessions: SessionFactory | None = None
+    if settings.database_url is not None:
+        db_engine, db_sessions = create_database(
+            settings.database_url.get_secret_value(),
+            connect_timeout_seconds=max(1, int(settings.readiness_timeout_seconds)),
+        )
+
     if checks is None:
         built: list[Check] = []
-        if settings.database_url is not None:
-            built.append(
-                tcp_check(
-                    "postgres",
-                    settings.database_url.get_secret_value(),
-                    settings.readiness_timeout_seconds,
-                )
-            )
+        if db_engine is not None:
+
+            async def _postgres_check() -> CheckResult:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(check_database, db_engine),
+                        timeout=settings.readiness_timeout_seconds,
+                    )
+                except (SQLAlchemyError, OSError, TimeoutError):
+                    return CheckResult("postgres", False, "query_failed")
+                return CheckResult("postgres", True, "query_ok")
+
+            built.append(_postgres_check)
         if settings.redis_url is not None:
             built.append(
                 tcp_check(
@@ -138,8 +161,12 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         log.info("api.started", extra={"config": settings.safe_summary(), "version": __version__})
-        yield
-        log.info("api.stopped")
+        try:
+            yield
+        finally:
+            if db_engine is not None:
+                db_engine.dispose()
+            log.info("api.stopped")
 
     prod = settings.env is Environment.PRODUCTION
     app = FastAPI(
@@ -166,7 +193,9 @@ def create_app(
                         timeout_seconds=5,
                     )
                 ),
-                DerivedSubjectMapper(),
+                PostgresSubjectMapper(db_sessions)
+                if db_sessions is not None
+                else DerivedSubjectMapper(),
                 issuer=settings.auth_issuer,
                 audience=settings.auth_audience,
                 leeway_seconds=30,
@@ -175,9 +204,17 @@ def create_app(
         else:
             authenticator = DevAuthenticator(settings.env) if dev else NoAuthenticator()
     app.state.authenticator = authenticator
-    # Placeholder until P4 persistence; an empty repo means nobody has a membership (fail closed).
-    app.state.membership_repo = membership_repo or InMemoryMembershipRepository()
-    app.state.moodle_connection_repository = None
+    app.state.db_engine = db_engine
+    app.state.db_sessions = db_sessions
+    app.state.membership_repo = membership_repo or (
+        PostgresMembershipRepository(db_sessions)
+        if db_sessions is not None
+        else InMemoryMembershipRepository()
+    )
+    app.state.moodle_connection_repository = (
+        new_postgres_connection_repository(db_sessions) if db_sessions is not None else None
+    )
+    app.state.moodle_read_service = moodle_read_service
     app.state.readiness_checks = list(checks)
     app.state.readiness_timeout = settings.readiness_timeout_seconds
 

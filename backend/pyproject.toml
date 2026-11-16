@@ -4,9 +4,14 @@ version = "0.0.1"
 description = "Moallem AI backend (API + Worker). Phase P1 foundation skeleton."
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "alembic>=1.13,<2",
+  "cryptography>=50,<51",
   "fastapi>=0.115,<1",
+  "psycopg[binary,pool]>=3.2,<4",
   "pydantic>=2.8,<3",
   "pydantic-settings>=2.4,<3",
+  "pyjwt>=2.10,<3",
+  "sqlalchemy>=2.0,<3",
   "uvicorn[standard]>=0.30,<1",
 ]
 

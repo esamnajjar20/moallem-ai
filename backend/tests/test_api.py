@@ -95,6 +95,12 @@ def test_docs_disabled_in_production() -> None:
         env="production",
         database_url="postgresql://u:p@db/x",
         redis_url="redis://cache/0",
+        auth_issuer="https://tenant.example.auth0.com/",
+        auth_audience="https://api.example",
+        auth_max_token_lifetime_seconds=3600,
+        idempotency_hmac_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        idempotency_retention_seconds=86400,
+        event_cursor_hmac_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
         _env_file=None,
     )
     client = TestClient(create_app(s, checks=[]))

@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Protocol
 
 from moallem.domain.authorization import PermissionPolicy, authorize
 from moallem.domain.membership import ActiveContext
@@ -48,7 +49,8 @@ class MoodleConnection:
     moodle_user_id: int | None = None
 
 
-ConnectionRepository = InMemoryScopedRepository[MoodleConnection]
+class ConnectionRepository(Protocol):
+    def get(self, ctx: ActiveContext, item_id: str) -> MoodleConnection: ...
 
 
 def new_connection_repository() -> ConnectionRepository:

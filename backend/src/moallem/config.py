@@ -6,11 +6,13 @@ Rules:
 - Startup aborts with a ConfigError that lists field names only, never values.
 """
 
+import base64
+import binascii
 from enum import StrEnum
 from typing import Self
 from urllib.parse import urlsplit
 
-from pydantic import SecretStr, ValidationError, field_validator, model_validator
+from pydantic import SecretStr, ValidationError, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,10 +51,13 @@ class Settings(BaseSettings):
     database_url: SecretStr | None = None
     redis_url: SecretStr | None = None
     readiness_timeout_seconds: float = 2.0
-    # ADR-017 (PROPOSED, Auth0). All three or none: no defaults for security values.
-    auth_issuer: str | None = None  # e.g. https://<tenant>.auth0.com/  (keep trailing slash)
+    auth_issuer: str | None = None  # Auth0 issuer URL; keep trailing slash
     auth_audience: str | None = None  # Auth0 API identifier
     auth_max_token_lifetime_seconds: int | None = None
+    secret_encryption_key: SecretStr | None = None
+    idempotency_hmac_key: SecretStr | None = None
+    idempotency_retention_seconds: int | None = None
+    event_cursor_hmac_key: SecretStr | None = None
 
     @field_validator("readiness_timeout_seconds")
     @classmethod
@@ -75,6 +80,22 @@ class Settings(BaseSettings):
             raise ValueError("unsupported redis URL scheme")
         return v
 
+    @field_validator("secret_encryption_key", "idempotency_hmac_key", "event_cursor_hmac_key")
+    @classmethod
+    def _base64_key(cls, v: SecretStr | None, info: ValidationInfo) -> SecretStr | None:
+        if v is None:
+            return None
+        try:
+            key = base64.b64decode(v.get_secret_value(), validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError(f"{info.field_name} must be base64 encoded") from exc
+        minimum = 32
+        expected = 32 if info.field_name == "secret_encryption_key" else None
+        if len(key) < minimum or (expected is not None and len(key) != expected):
+            qualifier = "exactly 32" if expected is not None else "at least 32"
+            raise ValueError(f"{info.field_name} must decode to {qualifier} bytes")
+        return v
+
     @model_validator(mode="after")
     def _auth_all_or_none(self) -> Self:
         fields = (self.auth_issuer, self.auth_audience, self.auth_max_token_lifetime_seconds)
@@ -87,6 +108,36 @@ class Settings(BaseSettings):
         lifetime = self.auth_max_token_lifetime_seconds
         if lifetime is not None and not 60 <= lifetime <= 86400:
             raise ValueError("auth_max_token_lifetime_seconds must be 60..86400")
+        if self.env in (Environment.STAGING, Environment.PRODUCTION) and self.auth_issuer is None:
+            raise ValueError(
+                "Auth0 issuer, audience and token lifetime are required outside dev/test"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _p4_key_settings(self) -> Self:
+        idempotency_values = (self.idempotency_hmac_key, self.idempotency_retention_seconds)
+        if any(value is not None for value in idempotency_values) and not all(
+            value is not None for value in idempotency_values
+        ):
+            raise ValueError(
+                "idempotency_hmac_key and idempotency_retention_seconds must be set together"
+            )
+        if (
+            self.idempotency_retention_seconds is not None
+            and self.idempotency_retention_seconds < 1
+        ):
+            raise ValueError("idempotency_retention_seconds must be positive")
+        if (
+            self.env in (Environment.STAGING, Environment.PRODUCTION)
+            and self.secret_encryption_key is not None
+        ):
+            raise ValueError("environment encryption keys are development-only; configure a KMS")
+        if (
+            self.env in (Environment.STAGING, Environment.PRODUCTION)
+            and self.event_cursor_hmac_key is None
+        ):
+            raise ValueError("event cursor signing key is required outside dev/test")
         return self
 
     @model_validator(mode="after")
@@ -97,6 +148,8 @@ class Settings(BaseSettings):
                 for name, value in (
                     ("database_url", self.database_url),
                     ("redis_url", self.redis_url),
+                    ("idempotency_hmac_key", self.idempotency_hmac_key),
+                    ("idempotency_retention_seconds", self.idempotency_retention_seconds),
                 )
                 if value is None
             ]
@@ -113,6 +166,9 @@ class Settings(BaseSettings):
             "redis_url_set": self.redis_url is not None,
             "readiness_timeout_seconds": self.readiness_timeout_seconds,
             "auth_configured": self.auth_issuer is not None,
+            "secret_encryption_key_set": self.secret_encryption_key is not None,
+            "idempotency_configured": self.idempotency_hmac_key is not None,
+            "event_cursor_configured": self.event_cursor_hmac_key is not None,
         }
 
 
