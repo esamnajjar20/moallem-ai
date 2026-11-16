@@ -4,10 +4,12 @@ Planning baseline: Moallem AI Engineering Documentation v2.4.
 
 ## Current implementation status
 
-- Backend foundation: implementation exists; the locked Python 3.12.16 verification passes locally (314 tests).
+- Backend: locked Python 3.12.16 checks pass; `make check` reports 322 passed and one optional
+  PostgreSQL test skipped. With the temporary PostgreSQL 15.19 test database, all 323 tests pass.
 - Mobile foundation: Flutter shell exists; toolchain is now pinned to Flutter 3.50.0 / Dart 3.14.0.
 - **P1 is not yet closed:** Flutter 3.50.0 format, analysis, tests, and Android debug APK build pass locally; a green GitHub Actions run is still required for closure.
 - **P3 read adapter:** code and synthetic-fixture tests exist (`backend/src/moallem/moodle/`); it is unverified against a real Moodle. See `docs/PHASE3_STATUS.md`.
+- **P4 persistence:** PostgreSQL models, Alembic migration, tenant-scoped repositories, and Moodle route injection are locally verified; production key custody and Moodle staging remain blocked. See `docs/PHASE4_STATUS.md`.
 - ADR-015 (Riverpod) and ADR-016 (mypy) remain provisional pending owner sign-off.
 - P2/P4 domain primitives are not a substitute for the later persistence, identity, Moodle, or queue integrations.
 

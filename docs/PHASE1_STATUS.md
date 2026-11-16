@@ -21,11 +21,11 @@ has demonstrated a green end-to-end gate; iOS still requires the macOS CI runner
 
 | Check | Result | Qualification |
 |---|---|---|
-| Backend locked sync | **PASS** | `cd backend && uv sync --locked`; Python 3.12.16, uv 0.13.8. |
-| Ruff format/check | **PASS** | `ruff format --check .` and `ruff check .`; Ruff 0.17.5. |
-| mypy | **PASS** | `uv run --locked mypy`; mypy 1.20.2, 39 source files, no issues. |
-| Backend tests | **PASS** | `uv run --locked pytest -ra`; **314 passed, 1 Starlette/httpx deprecation warning**. Includes all requested HTTP test files. |
-| Backend build/audit | **PASS WITH AUDIT QUALIFICATION** | `uv build` built sdist and wheel. `pip-audit` found no known vulnerabilities; it skipped local `moallem 0.0.1` because it is not on PyPI. |
+| Backend locked checks | **PASS** | `make check` with `uv run --locked`; Python 3.12.16, uv 0.13.8. |
+| Ruff format/check | **PASS** | `make check` ran `ruff check .` and `ruff format --check .`; Ruff 0.17.5. |
+| mypy | **PASS** | `make check`; mypy 1.20.2, 45 source files, no issues. |
+| Backend tests | **PASS** | `make check`: **322 passed, 1 optional PostgreSQL test skipped**. With the temporary PostgreSQL 15.19 test database: **323 passed, 1 Starlette/httpx deprecation warning**. |
+| Backend build/audit | **PASS WITH AUDIT QUALIFICATION** | `make check` built sdist and wheel. `pip-audit` found no known vulnerabilities after updating locked `cryptography` to 50.0.2; it skipped local `moallem 0.0.1` because it is not on PyPI. |
 | Flutter pub/format/analyze/tests | **PASS** | Flutter 3.50.0 / Dart 3.14.0; enforced-lockfile pub get succeeded, 6 Dart files unchanged, analyze clean, **3 tests passed**. |
 | Android debug APK | **PASS** | `flutter build apk --debug` succeeded with `GRADLE_USER_HOME=/tmp/moallem-gradle-user-home`; APK: `/tmp/moallem-gradle-project-build/app/outputs/flutter-apk/app-debug.apk` (129,067,034 bytes; ZIP integrity check passed). |
 | GitHub Actions | **NOT RUN** | YAML parses and lists four jobs; `actionlint` is not installed. A PR and green GitHub run are still required. |

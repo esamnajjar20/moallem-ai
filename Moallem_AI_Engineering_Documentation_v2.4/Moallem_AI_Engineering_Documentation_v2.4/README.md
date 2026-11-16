@@ -7,6 +7,8 @@
 - `Planning/Unified_Decision_and_Blocker_Register_v2.4.md` is the authoritative decision/external-input/verification/gap register.
 - `Planning/Planning_Closure_Decisions_v2.4.docx` describes the five proposed P0 closure baselines and residual blockers.
 - `Planning/Implementation_Control_v2.4.xlsx` tracks backlog, decision states and review approvals.
+- `Planning/Owner_Approval_Record_v2.4_2026-11-16.md` records the Project Owner's approval scope
+  and the residual decisions that remain open.
 - `Planning/Requirements_Traceability.csv` maps requirements to tests/evidence/owners. `Planning/Test_ID_Catalog_v2.4.csv` is the authoritative test identifier index.
 - `Contracts/openapi.draft.yaml` is the proposed 17-operation Moallem REST contract.
 - `Contracts/tool_registry.draft.json` defines per-tool JSON Schemas and policy metadata; tools remain `executable=false`.
@@ -21,6 +23,10 @@
 | P0-J API contract | Typed transport DTOs, error catalogue, sequence-based event cursors, and connection lifecycle endpoints. Question payload union remains DEC-033. | READY_FOR_APPROVAL_WITH_DOMAIN_RESIDUAL |
 | P0-K Tool contract | Versioned input/output JSON Schemas and authorization/runtime/audit policy metadata for each tool. Registry remains non-executable pending CI/policy enforcement and site mappings. | READY_FOR_APPROVAL |
 | P0-L Reliability | PostgreSQL idempotency/outbox/inbox/tool ledger, stable per-step identities, cancel intent/reconciliation, ordered events. | READY_FOR_APPROVAL |
+
+The Project Owner approved the v2.4 planning baseline on 2026-11-16 and selected Auth0,
+PostgreSQL, and AES-256-GCM for the explicitly scoped implementation work. See the approval record;
+this does not close unrelated design decisions or external evidence gates.
 
 ## Moodle credential distinction
 The MVP uses legacy External Web Services functions and therefore uses a token for the configured External Service. Moodle 5.3 Personal Access Tokens belong to the newer REST API and are not treated as interchangeable with External Web Service tokens. The site-specific API Documentation, roles, capabilities and enabled functions must still be checked on staging.

@@ -18,10 +18,10 @@
 |---|---|---|---|---|
 | ADR-015 | Flutter state management (Riverpod vs Bloc) | OPEN | Mobile Lead | Prototype صغير + قابلية الاختبار والصيانة وتوافق الفريق؛ لا يُعد مانعاً لقرارات Moodle. |
 | ADR-016 | Python type checker (Pyright vs mypy) | OPEN | Backend Lead | تجربة CI صارمة على مشروع نموذجي وتوثيق سياسة strictness. |
-| ADR-017 | Identity/authentication/session flow | OPEN | Product + Security | اختيار issuer/subject mapping، access/refresh، rotation/revocation، MFA، logout/session invalidation. |
+| ADR-017 | Identity/authentication/session flow | OPEN | Product + Security | Auth0 provider selected by Project Owner on 2026-11-16; issuer/audience, subject/account linking, access/refresh, rotation/revocation, MFA, logout/session invalidation remain open. See `Owner_Approval_Record_v2.4_2026-11-16.md`. |
 | ADR-018 | AI provider/model/data region | OPEN | Product + Privacy | العربية، جودة التعليم، شروط البيانات، الاحتفاظ، region، التكلفة، latency وfallback. |
 | ADR-019 | SSE vs polling | OPEN | Backend + Mobile | مقارنة على شبكة ضعيفة/بطارية/عدد الاتصالات؛ GET task status يبقى مصدر الحالة. |
-| ADR-020 | Hosting provider/region/network | OPEN | Product + Infra | residency، egress، availability، budget، backup، اتصال Moodle ومزود AI. |
+| ADR-020 | Hosting provider/region/network | OPEN | Product + Infra | PostgreSQL and AES-256-GCM selected for P4 on 2026-11-16; hosting, residency, egress, availability, budget, backup, Moodle/AI connectivity remain open. See owner approval record. |
 | ADR-021 | Admin console scope/technology | DEFERRED | Product + Ops | بعد ثبوت احتياج الدعم/Pilot؛ لا يوسع MVP. |
 | ADR-022 | RPO/RTO | OPEN | Product + Ops | أثر الانقطاع، كلفة الحماية، ونتيجة restore drill موثقة. |
 | ADR-023 | SLO/capacity/concurrency | OPEN | SRE/FinOps | baseline ثم pilot load؛ الأهداف الحالية فرضيات لا SLA. |
@@ -35,9 +35,9 @@
 | DEC-026 | هل يمكن مشاركة Moodle Site بين أكثر من Tenant؟ | OPEN | Product + Architecture | سجل Site مركزي مع grants منفصلة؛ أو Site مستقل لكل Tenant. لا تفترض مشاركة credential أو صلاحيات بين tenants. | تحديد ownership، isolation boundaries، uniqueness، billing، revocation واختبارات cross-tenant. |
 | DEC-027 | Permission Matrix teacher × action × resource | OPEN | Product + Security | صلاحية على مستوى المقرر/النشاط/نوع العملية؛ دور Moodle وحده لا يكفي. | مصفوفة قابلة للاختبار لكل فعل قراءة/كتابة/موافقة ودور. |
 | DEC-028 | Retention/deletion/anonymization | OPEN | Product + Privacy | مدد منفصلة للمحتوى والملفات والمقاطع/embeddings والتدقيق والنسخ الاحتياطية. | Data lifecycle map + مدد + deletion propagation + legal/contract review. |
-| DEC-029 | Object Storage/KMS/region/lifecycle | OPEN | Infra + Security | مزود/منطقة/تشفير/نسخ/حماية حذف/تكلفة/سياسة signed URLs. | اختيار موثق واختبار وصول وعزل وحذف واستعادة. |
+| DEC-029 | Object Storage/KMS/region/lifecycle | OPEN | Infra + Security | AES-256-GCM selected as the application-level encryption algorithm on 2026-11-16; KMS/Secret Manager, key rotation, region, lifecycle, backups, deletion and signed-URL policy remain open. | اختيار موثق واختبار وصول وعزل وحذف واستعادة. |
 | DEC-030 | Queue delivery/persistence/retry/DLQ/visibility | OPEN | Backend + Ops | Celery/Redis أو وسيط آخر؛ ack timing؛ lease؛ retry/backoff؛ dead-letter؛ ordering. | ADR واختبارات crash/duplicate/poison message وقيود عدم ضياع outbox. |
-| DEC-031 | PK strategy وDDL النهائي | OPEN | Tech Lead | UUID داخلي؛ external IDs منفصلة؛ تاريخ العضويات/المفاتيح المركبة. | DDL review + migration/upgrade tests. |
+| DEC-031 | PK strategy وDDL النهائي | OPEN | Tech Lead | PostgreSQL selected for P4 on 2026-11-16; internal/external IDs, PK/FK strategy, membership history and final production DDL remain open. | DDL review + migration/upgrade tests. |
 | DEC-032 | RLS أم عزل التطبيق والمفاتيح المركبة أم الجمع بينهما؟ | OPEN | Backend + Security | RLS defense-in-depth مقابل كلفة إدارة session context وpooling. | threat analysis واختبارات عزل worker/API/cache/storage، لا قرار شكلي فقط. |
 | DEC-033 | أنواع الأسئلة التي تدخل MVP وQuestion DTO | OPEN | Product + Education | اختيار نوع/أنواع بداية محدودة، بنية الإجابة والتصحيح والمشتتات والوسائط. | Scope واضح + discriminated schema + golden examples + Moodle mapping. |
 | DEC-034 | النطاق التعليمي وعتبات الجودة | OPEN | Education Lead | صف/مرحلة/مادة/منهاج/لغة؛ دقة المصدر؛ طريقة التحكيم واتفاق المراجعين. | Golden Dataset ومقياس قبول/رفض محدد ومبرر. |
@@ -167,6 +167,13 @@
 ## M. حالة المستندات v2.4
 
 خطوط أساس v2.4 أصبحت مكتملة على مستوى التصميم المقترح وتنتظر اعتماد أصحاب القرار؛ لا يعني READY_FOR_APPROVAL أنها CLOSED. OpenAPI وTool Registry يظلان مسودتين غير قابلتين للاستخدام الإنتاجي، ولا يوجد اختبار حي أو تكامل Moodle مثبت. عند التعارض، تطبق ملاحق v2.4 على عناصر النطاق التي تغطيها، ثم v2.3/v2.2، مع بقاء مواصفات v2.0 baseline للمجالات الأخرى.
+
+### M.1 Owner approval recorded on 2026-11-16
+
+The Project Owner approved v2.4 as the planning baseline and selected Auth0, PostgreSQL, and
+AES-256-GCM for the scoped implementation work. The exact approval and residual open items are in
+`Planning/Owner_Approval_Record_v2.4_2026-11-16.md`. This approval does not close ADR-017, ADR-020,
+DEC-029, DEC-030, DEC-031, DEC-032, DEC-033, DEC-034, or any Moodle external/verification item.
 
 
 ## إضافات P0-L التفصيلية
