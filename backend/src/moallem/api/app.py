@@ -34,6 +34,7 @@ from moallem.domain.rs256 import Rs256Verifier
 from moallem.errors import ErrorCode
 from moallem.health.checks import Check, tcp_check
 from moallem.logging import configure_logging, request_id_var
+from moallem.moodle.routes import router as moodle_router
 
 log = logging.getLogger("moallem.api")
 
@@ -176,6 +177,7 @@ def create_app(
     app.state.authenticator = authenticator
     # Placeholder until P4 persistence; an empty repo means nobody has a membership (fail closed).
     app.state.membership_repo = membership_repo or InMemoryMembershipRepository()
+    app.state.moodle_connection_repository = None
     app.state.readiness_checks = list(checks)
     app.state.readiness_timeout = settings.readiness_timeout_seconds
 
@@ -203,4 +205,5 @@ def create_app(
     # 17-operation product contract (see docs/PHASE1_STATUS.md, "Contract notes").
     app.include_router(health_router)
     app.include_router(me_router)
+    app.include_router(moodle_router)
     return app
