@@ -1,19 +1,22 @@
 name: moallem_mobile
-description: Moallem AI teacher app (P1 foundation shell).
+description: Moallem AI teacher app — Vertical Slice (P8 / Phase C).
 publish_to: "none"
-version: 0.0.1+1
+version: 0.1.0+1
 
 environment:
-  # Flutter is pinned separately in .flutter-version and pubspec's flutter constraint.
   sdk: ">=3.8.0 <4.0.0"
   flutter: "3.50.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  # ADR-015 remains provisional; P1 only needs a testable provider container.
+  flutter_localizations:
+    sdk: flutter
   flutter_riverpod: ^2.6.1
-  material_ui: ^1.11.1
+  go_router: ^14.8.1
+  http: ^1.3.0
+  flutter_secure_storage: ^9.2.4
+  intl: ^0.20.2
 
 dev_dependencies:
   flutter_test:

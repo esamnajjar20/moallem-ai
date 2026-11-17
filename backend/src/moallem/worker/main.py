@@ -11,7 +11,9 @@ from moallem.logging import configure_logging
 from moallem.persistence.database import create_database
 from moallem.persistence.idempotency_repository import PostgresIdempotencyRepository
 from moallem.persistence.outbox_repository import PostgresOutboxRepository
+from moallem.persistence.publishing_repository import PostgresPublicationRepository
 from moallem.persistence.task_repository import PostgresTaskRepository
+from moallem.worker.composition import build_handler_registry
 from moallem.worker.queue import (
     PostgresTaskWorker,
     RetryPolicy,
@@ -59,16 +61,45 @@ def _worker_settings(settings: Settings) -> WorkerSettings:
     )
 
 
+def _build_handlers(settings: Settings, sessions: object) -> TaskHandlerRegistry:
+    """Compose task handlers.
+
+    CREATE_QUIZ publish is registered only when Moodle write dependencies are
+    explicitly provided via build_handler_registry(...). By default the worker
+    starts with publications available for future wiring but without a live
+    Moodle write path (fail-closed).
+
+    To enable the publish path in a controlled environment:
+
+        handlers = build_handler_registry(
+            publications=PostgresPublicationRepository(sessions),
+            connections=...,
+            vault=...,
+            transport=...,
+            resolver=...,
+            write_adapter=StagingMoodleWriteAdapter(...),  # after A1
+            enable_teacher_policy=True,
+        )
+    """
+    del settings  # reserved for future feature flags
+    publications = PostgresPublicationRepository(sessions)  # type: ignore[arg-type]
+    # Moodle network deps are intentionally omitted until Staging evidence (A1)
+    # and a concrete write adapter exist. Registry stays empty for CREATE_QUIZ.
+    return build_handler_registry(publications=publications)
+
+
 async def run(
     settings: Settings,
     stop: asyncio.Event,
-    handlers: TaskHandlerRegistry,
+    handlers: TaskHandlerRegistry | None = None,
 ) -> None:
     if settings.database_url is None:
         raise ConfigError("worker configuration missing: database_url")
     worker_settings = _worker_settings(settings)
 
     engine, sessions = create_database(settings.database_url.get_secret_value())
+    if handlers is None:
+        handlers = _build_handlers(settings, sessions)
     worker = PostgresTaskWorker(
         queue=PostgresOutboxRepository(sessions),
         idempotency=PostgresIdempotencyRepository(sessions),
@@ -76,7 +107,14 @@ async def run(
         handlers=handlers,
         settings=worker_settings,
     )
-    log.info("worker.started", extra={"config": settings.safe_summary(), "version": __version__})
+    log.info(
+        "worker.started",
+        extra={
+            "config": settings.safe_summary(),
+            "version": __version__,
+            "registered_task_types": sorted(handlers.registered_types()),
+        },
+    )
     try:
         await worker.run(stop)
     finally:
@@ -84,7 +122,7 @@ async def run(
         log.info("worker.stopped")
 
 
-async def _amain(settings: Settings, handlers: TaskHandlerRegistry) -> None:
+async def _amain(settings: Settings, handlers: TaskHandlerRegistry | None = None) -> None:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -100,7 +138,7 @@ def main() -> int:
         return 2
     configure_logging(settings.log_level.value, service="moallem-worker", env=settings.env.value)
     try:
-        asyncio.run(_amain(settings, TaskHandlerRegistry()))
+        asyncio.run(_amain(settings))
     except ConfigError as exc:
         log.error("worker.configuration_failed", extra={"reason": str(exc)})
         return 2

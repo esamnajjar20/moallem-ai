@@ -1,4 +1,4 @@
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:moallem_mobile/app.dart';
@@ -6,25 +6,16 @@ import 'package:moallem_mobile/core/app_config.dart';
 import 'package:moallem_mobile/core/providers.dart';
 
 void main() {
-  testWidgets('shell renders in Arabic and lays out right-to-left', (
-    tester,
-  ) async {
+  testWidgets('login screen renders in mock mode', (tester) async {
+    final config = AppConfig.parse('', useMocks: true);
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [
-          appConfigProvider.overrideWithValue(
-            AppConfig.parse('https://api.example.invalid/api/v1'),
-          ),
-        ],
+        overrides: [appConfigProvider.overrideWithValue(config)],
         child: const MoallemApp(),
       ),
     );
     await tester.pumpAndSettle();
-
-    expect(find.byKey(const Key('app-title')), findsOneWidget);
-    final direction = Directionality.of(
-      tester.element(find.byKey(const Key('app-title'))),
-    );
-    expect(direction, TextDirection.rtl);
+    expect(find.text('معلم AI'), findsOneWidget);
+    expect(find.text('دخول'), findsOneWidget);
   });
 }

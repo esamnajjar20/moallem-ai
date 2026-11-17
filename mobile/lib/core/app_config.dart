@@ -1,20 +1,36 @@
-/// Build-time configuration, supplied with:
-///   flutter run --dart-define=MOALLEM_API_BASE_URL=https://api.example.invalid/api/v1
+/// Build-time configuration.
 ///
-/// No secrets belong here: anything compiled into the app is extractable.
+///   flutter run --dart-define=MOALLEM_API_BASE_URL=https://api.example.com/api/v1 \
+///               --dart-define=MOALLEM_USE_MOCKS=true
+///
+/// No secrets belong here.
 class AppConfig {
-  const AppConfig({required this.apiBaseUrl});
+  const AppConfig({
+    required this.apiBaseUrl,
+    this.useMocks = false,
+  });
 
   final Uri apiBaseUrl;
+  final bool useMocks;
 
-  static const String _rawBaseUrl = String.fromEnvironment(
-    'MOALLEM_API_BASE_URL',
+  static const String _rawBaseUrl = String.fromEnvironment('MOALLEM_API_BASE_URL');
+  static const String _rawUseMocks = String.fromEnvironment(
+    'MOALLEM_USE_MOCKS',
+    defaultValue: 'false',
   );
 
-  /// Fails fast: throws [StateError] on a missing or malformed base URL.
-  factory AppConfig.fromEnvironment() => AppConfig.parse(_rawBaseUrl);
+  factory AppConfig.fromEnvironment() => AppConfig.parse(
+        _rawBaseUrl,
+        useMocks: _rawUseMocks.toLowerCase() == 'true',
+      );
 
-  factory AppConfig.parse(String raw) {
+  factory AppConfig.parse(String raw, {bool useMocks = false}) {
+    if (useMocks && raw.isEmpty) {
+      return AppConfig(
+        apiBaseUrl: Uri.parse('https://mock.local/api/v1'),
+        useMocks: true,
+      );
+    }
     final uri = Uri.tryParse(raw);
     if (raw.isEmpty ||
         uri == null ||
@@ -22,9 +38,10 @@ class AppConfig {
         !(uri.scheme == 'https' || uri.scheme == 'http')) {
       throw StateError(
         'MOALLEM_API_BASE_URL must be an absolute http(s) URL '
-        '(pass --dart-define=MOALLEM_API_BASE_URL=...).',
+        '(pass --dart-define=MOALLEM_API_BASE_URL=...), '
+        'or set MOALLEM_USE_MOCKS=true for local UI work.',
       );
     }
-    return AppConfig(apiBaseUrl: uri);
+    return AppConfig(apiBaseUrl: uri, useMocks: useMocks);
   }
 }

@@ -1,4 +1,4 @@
-import 'package:material_ui/material_ui.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
@@ -7,7 +7,7 @@ import 'core/providers.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  final config = AppConfig.fromEnvironment(); // fail fast on bad config
+  final config = AppConfig.fromEnvironment();
   runApp(
     ProviderScope(
       overrides: [appConfigProvider.overrideWithValue(config)],
