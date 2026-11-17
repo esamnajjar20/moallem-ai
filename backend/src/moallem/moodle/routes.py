@@ -41,7 +41,7 @@ def get_moodle_read_service(
 
 @router.get(
     "/courses",
-    operation_id="listTeacherCourses",
+    operation_id="listEnrolledCourses",
     response_model=None,
     responses={503: {"description": "Moodle connection repository unavailable"}},
 )
@@ -78,8 +78,14 @@ def get_course_context(
     connection_id: UUID,
 ) -> dict[str, Any]:
     contents = service.course_contents(context, str(connection_id), course_id)
+    source_refs = [
+        file_ref.source_ref_id
+        for section in contents.sections
+        for module in section.modules
+        for file_ref in module.files
+    ]
     return {
         "course_id": contents.course_id,
         "sections": [section.to_dict() for section in contents.sections],
-        "source_refs": [],
+        "source_refs": list(dict.fromkeys(source_refs)),
     }

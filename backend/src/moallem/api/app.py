@@ -250,6 +250,11 @@ def create_app(
     # 17-operation product contract (see docs/PHASE1_STATUS.md, "Contract notes").
     app.include_router(health_router)
     app.include_router(me_router)
-    app.include_router(moodle_router)
-    app.include_router(task_router)
+    # The OpenAPI server URL already includes /api/v1. Register the product routes there
+    # and keep unversioned aliases temporarily for older clients; aliases are hidden from
+    # generated OpenAPI so there is one canonical contract surface.
+    app.include_router(moodle_router, prefix="/api/v1")
+    app.include_router(task_router, prefix="/api/v1")
+    app.include_router(moodle_router, include_in_schema=False)
+    app.include_router(task_router, include_in_schema=False)
     return app

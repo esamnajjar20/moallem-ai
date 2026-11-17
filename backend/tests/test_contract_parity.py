@@ -54,17 +54,19 @@ def test_task_routes_and_event_types_match_openapi() -> None:
     }
     for path, methods in expected.items():
         assert path in contract_paths
-        assert path in app_paths
+        versioned_path = f"/api/v1{path}"
+        assert versioned_path in app_paths
         assert methods <= set(contract_paths[path])
-        assert methods <= set(app_paths[path])
+        assert methods <= set(app_paths[versioned_path])
 
     task_contract = _schemas()
     assert {event.value for event in TaskEventType} == set(
         task_contract["TaskEvent"]["properties"]["event_type"]["enum"]
     )
     post_parameters = {
-        parameter["name"]: parameter for parameter in app_paths["/tasks"]["post"]["parameters"]
+        parameter["name"]: parameter
+        for parameter in app_paths["/api/v1/tasks"]["post"]["parameters"]
     }
     assert post_parameters["Idempotency-Key"]["required"] is True
     assert post_parameters["X-Active-Membership-ID"]["required"] is True
-    assert "202" in app_paths["/tasks"]["post"]["responses"]
+    assert "202" in app_paths["/api/v1/tasks"]["post"]["responses"]

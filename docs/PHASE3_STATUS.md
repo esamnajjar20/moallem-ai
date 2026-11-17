@@ -1,9 +1,13 @@
 # P3 — Moodle Read Adapter: status
 
 **Status: LOCALLY VERIFIED CODE, NOT CLOSED.** The adapter, local TLS transport tests, route
-guards, and sanitized-fixture replay harness pass repository tests. The exit gate still requires
-real Moodle staging evidence for each read operation and teacher role. P0-02/03/04 (staging URL,
-live API docs, teacher account) are BLOCKED; synthetic tests do not establish Moodle compatibility.
+guards, and sanitized-fixture replay harness pass repository tests. The API is now mounted under
+its canonical `/api/v1` base path; unversioned aliases remain temporarily available but are hidden
+from OpenAPI. Course-content reads now require the connected Moodle principal to be enrolled in the
+requested course and return safe file provenance metadata. This still does not prove a teacher role.
+The exit gate requires real Moodle staging evidence for each read operation and teacher capability.
+P0-02/03/04 (staging URL, live API docs, teacher account) remain BLOCKED; synthetic tests do not
+establish Moodle compatibility.
 
 ## What was implemented (`backend/src/moallem/moodle/`)
 
@@ -12,13 +16,15 @@ live API docs, teacher account) are BLOCKED; synthetic tests do not establish Mo
 | `url_policy.py` | SSRF baseline (`Validation/Moodle_Connection_SSRF_and_Network_Egress_v2.4.md`) | https only; no credentials/query/fragment/IP literals (incl. `0x7f.1`, decimal); blocks localhost/`.internal`/`.local`/metadata names; default-deny on non-global IPs incl. IPv4-mapped IPv6, CGNAT; **every** resolved address must pass; metadata ranges blocked even with a private-campus profile; redirect policy (cross-host denied, hop cap). |
 | `client.py` | REST transport seam | Token only in POST body; `Token` redacted in repr/str/pickle; destination re-resolved and pinned per call; redirects not followed; remote error *messages discarded* (only a sanitised errorcode is kept); size/time limits passed to the transport. |
 | `transport.py` | Opt-in stdlib HTTPS transport | `SystemResolver` and `PinnedHttpsTransport` connect to the validated pinned IP while using the original hostname for SNI, Host, and TLS verification; do not follow redirects; enforce socket timeout and stream response bytes up to the configured cap. Not wired into the app. |
-| `read.py` | P3-01..03 | `core_webservice_get_site_info` → `CapabilitySnapshot` (release/build, function list + SHA-256, missing required functions); `core_enrol_get_users_courses` → paged `CourseSummary`; `core_course_get_contents` → sections/modules/files shaped like the OpenAPI `CourseSection`/`CourseModuleSummary`; HTML reduced to plain text; caps on sections/modules/files with a `truncated` flag; file URLs accepted only on the connection's own host under `/webservice/pluginfile.php/`, never with a query/token. |
-| `service.py` | P2 ↔ P3 glue | `MoodleReadService`: tenant check (foreign = 404, AT-015) → permission (`moodle.connection.read` / `moodle.course.read` / `moodle.course.content.read`, DenyAll until DEC-027) → connection ACTIVE → secret reveal → call. |
-| `routes.py` | MoodleReadService-backed course routes | `GET /courses` and `GET /courses/{course_id}/context` require active membership and call the injected `MoodleReadService`. Without an explicitly supplied service they return 503 `MOODLE_UNAVAILABLE`; no transport, resolver, or service is activated by default. |
+| `read.py` | P3-01..03 | `core_webservice_get_site_info` → `CapabilitySnapshot` (release/build, function list + SHA-256, missing required functions); `core_enrol_get_users_courses` → paged enrolled `CourseSummary` (not teacher-filtered); `core_course_get_contents` → sections/modules/files shaped like the OpenAPI `CourseSection`/`CourseModuleSummary`; HTML reduced to plain text; caps on sections/modules/files with a `truncated` flag; file URLs accepted only on the connection's own host under `/webservice/pluginfile.php/`, never with a query/token. File references are now serialized as UUIDs with safe metadata (filename/path/size/MIME/modified time), never as remote download URLs. |
+| `service.py` | P2 ↔ P3 glue | `MoodleReadService`: tenant check (foreign = 404, AT-015) → permission (`moodle.connection.read` / `moodle.course.read` / `moodle.course.content.read`, DenyAll until DEC-027) → connection ACTIVE → secret reveal → call. Content reads perform an additional enrolment check for the connected Moodle user before fetching course content. |
+| `routes.py` | MoodleReadService-backed course routes | `GET /api/v1/courses` and `GET /api/v1/courses/{course_id}/context` require active membership and call the injected `MoodleReadService`. Without an explicitly supplied service they return 503 `MOODLE_UNAVAILABLE`; no transport, resolver, or service is activated by default. Legacy unversioned aliases are temporarily retained but hidden from OpenAPI. |
 | `errors.py` | contract codes | `MOODLE_CREDENTIAL_INVALID/FUNCTION_NOT_AVAILABLE/PERMISSION_DENIED/UNAVAILABLE`, `CONNECTION_NOT_ACTIVE`. **HTTP statuses (422/422/403/503/409) are my proposal**; the OpenAPI draft names the codes but not their statuses. |
 
-Verification: Python 3.12.16; the latest full backend suite with PostgreSQL enabled reported
-**362 passed, 1 Starlette/httpx deprecation warning**. It includes local TLS tests (SNI/Host/pinned IP/TLS
+Historical verification before the 2026-11-17 remediation: Python 3.12.16; the backend suite
+with PostgreSQL enabled at that earlier revision reported **362 passed, 1 Starlette/httpx
+deprecation warning**. This is historical evidence and does not validate the remediation in this
+archive; current environment results are recorded in the remediation section below. It includes local TLS tests (SNI/Host/pinned IP/TLS
 verification, redirect not followed, size cap and timeout),
 malformed URL and redirect-hop-limit tests, contract-parameter parity tests, and route 503 tests.
 The fixture-replay unit test uses in-memory synthetic data only. No real staging fixture was added.
@@ -29,9 +35,11 @@ or the current uncommitted worktree changes.
 ## What is still open (needs staging or a decision)
 
 1. **Teacher-only course list.** `core_enrol_get_users_courses` returns every enrolment and no
-   role. How to restrict to teacher courses (per-course role lookup? a plugin?) must be decided
-   from staging evidence. `list_teacher_courses` is therefore *enrolled* courses today; do not
-   use it as an authorisation signal for writes.
+   role. The route and operation are now truthfully named as enrolled-course listing, and content
+   reads confirm enrolment before fetching. How to restrict to teacher courses (per-course role
+   lookup? capability function? a plugin?) must be decided from staging evidence. Enrolment is not
+   a teacher authorisation signal; quiz creation and Moodle writes must remain disabled until a
+   teacher capability proof is implemented and tested.
 2. **Moodle errorcode mapping** (`invalidtoken`, `accessexception`, `nopermissions`, …) comes
    from Moodle conventions, not evidence. Unknown codes degrade to `MOODLE_UNAVAILABLE`, never to
    a permission/credential claim.
@@ -41,15 +49,32 @@ or the current uncommitted worktree changes.
 5. **Transport remains opt-in.** The stdlib transport/resolver now exist and were tested against
    a local TLS server; they are not selected by the application. ADR-020, deployment egress
    controls, and an approved network profile remain required before any live connection.
-6. **Routes require explicit composition.** Both course endpoints fail closed with 503 by default.
-   The HTTP success path has been tested with a synthetic MoodleReadService and fake transport, and
-   the PostgreSQL connection repository has a separate local integration test. The app does not
-   automatically enable the transport or construct a read service. The current draft contract has
-   no explicit 503 response on these two operations; the contract file was not changed.
+6. **Routes require explicit composition.** Both versioned course endpoints fail closed with 503
+   by default. The HTTP success path has been tested with a synthetic MoodleReadService and fake
+   transport, and the PostgreSQL connection repository has a separate local integration test. The
+   app does not automatically enable the transport or construct a read service. The OpenAPI draft
+   now documents the 503 response for both operations.
 7. **Persistence of capability snapshots** (P3-01 "تخزين") needs the database layer (DEC-031).
 8. The replay harness is `backend/scripts/replay_moodle_fixtures.py`; format and sanitization rules
    are in `docs/MOODLE_RECORDED_FIXTURES.md`. Fill Moodle Validation rows MDL-001.. with real
    evidence from `Validation/Moodle_Staging_Validation_Checklist.md` before calling any read SUPPORTED.
+
+## Remediation applied in this worktree (2026-11-17)
+
+- Mounted Moodle and task routes under `/api/v1`, consistent with the OpenAPI server URL. Legacy
+  root aliases remain for compatibility but are excluded from generated OpenAPI. Task response
+  URLs now point to `/api/v1/tasks/...`.
+- Renamed the public course operation to `listEnrolledCourses`; it no longer advertises an
+  unproven teacher-only guarantee.
+- Before reading a course's contents, the adapter checks that the connected Moodle principal is
+  enrolled in that course. This is an enrolment boundary only, not a teacher-role check.
+- Course content responses now preserve deterministic file source references and serialize safe
+  file metadata; `download_path` and any token-bearing URL remain server-side.
+- Added route, enrolment-denial, file-provenance, API URL, and contract regression tests.
+- Latest local non-PostgreSQL suite in this environment: **410 passed, 45 skipped, 1 deselected**.
+  The skipped cases require a live PostgreSQL test database. One production-startup test was
+  deselected because this environment lacks the declared `psycopg` driver. Python 3.13 was used,
+  not the required Python 3.12.16.
 
 ## Exit gate: NOT MET
 The green CI requirement is met. Remaining requirements: real staging evidence per operation and

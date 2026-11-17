@@ -22,8 +22,9 @@ for this worktree.
   remediation environment. The environment has Python 3.13.5 only, no project Python 3.12.16, no
   PostgreSQL server/client, and no `MOALLEM_TEST_DATABASE_URL`. Do not count skipped PostgreSQL
   tests as passing.
-- Current Alembic head is expected to be `9d4e7a2c1b60`; confirm with `alembic heads` and a live
-  `alembic check` against the target PostgreSQL version before release.
+- At the P4 remediation checkpoint, the expected Alembic head was `9d4e7a2c1b60`. P5 later added
+  migration `d61f8a2c9e34`; the current archive reports that single head. Confirm with `alembic heads`
+  and a live `alembic check` against the target PostgreSQL version before release.
 
 **Current release gate: PARTIAL / NOT READY.** Do not close P4 until the complete PostgreSQL suite,
 Alembic drift check, and downgrade/re-upgrade path pass on Python 3.12.16 with a disposable PostgreSQL
@@ -33,7 +34,7 @@ recovery UI remain separate planned work.
 ## Implemented
 
 - SQLAlchemy models and migrations cover tenant-scoped tasks, events, idempotency, Outbox, Inbox,
-  and task-recovery lineage. The original P4 Alembic revision was `8c3f1a4d2b90`; after the independent remediation the expected head is `9d4e7a2c1b60`.
+  and task-recovery lineage. The original P4 Alembic revision was `8c3f1a4d2b90`; after the independent P4 remediation the head was `9d4e7a2c1b60`. P5 subsequently advanced the chain to `d61f8a2c9e34`.
 - `PostgresTaskRepository.create_idempotent` persists the idempotency record, task, initial event,
   and Outbox row in one transaction. Rollback, duplicate requests, and concurrent creation are
   tested. PostgreSQL composite foreign keys prevent cross-tenant Moodle connections and task

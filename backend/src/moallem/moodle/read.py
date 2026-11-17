@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 
 from moallem.domain.errors import CursorInvalid
 from moallem.moodle.client import MoodleClient
-from moallem.moodle.errors import MoodleResponseInvalid, UnsafeMoodleUrl
+from moallem.moodle.errors import MoodlePermissionDenied, MoodleResponseInvalid, UnsafeMoodleUrl
 
 FN_SITE_INFO = "core_webservice_get_site_info"
 FN_USER_COURSES = "core_enrol_get_users_courses"
@@ -251,11 +251,15 @@ def decode_offset_cursor(cursor: str | None) -> int:
     return int(num)
 
 
-def list_teacher_courses(
+def list_enrolled_courses(
     client: MoodleClient, *, moodle_user_id: int, cursor: str | None = None, page_size: int = 25
 ) -> CoursePage:
-    """NOTE: returns the user's enrolled courses. Teacher-role filtering is OPEN (see module
-    docstring); write-path authorisation must not rely on this list."""
+    """Return courses in which the connected Moodle principal is enrolled.
+
+    Moodle's ``core_enrol_get_users_courses`` does not prove a teacher role. Callers must
+    not present this result as teacher-only, and must independently verify course capabilities
+    before enabling any write operation.
+    """
     if not 1 <= page_size <= PAGE_SIZE_MAX:
         raise ValueError("page_size out of range")
     offset = decode_offset_cursor(cursor)
@@ -267,6 +271,26 @@ def list_teacher_courses(
         has_more=more,
         next_cursor=encode_offset_cursor(offset + page_size) if more else None,
     )
+
+
+def list_teacher_courses(
+    client: MoodleClient, *, moodle_user_id: int, cursor: str | None = None, page_size: int = 25
+) -> CoursePage:
+    """Deprecated compatibility alias; result is enrolments, not verified teacher roles."""
+    return list_enrolled_courses(
+        client, moodle_user_id=moodle_user_id, cursor=cursor, page_size=page_size
+    )
+
+
+def require_course_enrollment(client: MoodleClient, *, moodle_user_id: int, course_id: str) -> None:
+    """Fail closed unless the connected principal is enrolled in the requested course.
+
+    This is an access-scope check, not proof of a teacher capability. Moodle writes remain
+    separately disabled until capability verification and write adapters are approved.
+    """
+    courses = parse_courses(client.call(FN_USER_COURSES, {"userid": moodle_user_id}))
+    if not any(course.course_id == course_id for course in courses):
+        raise MoodlePermissionDenied("moodle principal is not enrolled in this course")
 
 
 # ---------------------------------------------------------------- course contents / files
@@ -282,6 +306,17 @@ class FileRef:
     mimetype: str | None
     modified_at: str | None
     download_path: str  # path under the site root; validated by file_download_path
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_ref_id": self.source_ref_id,
+            "module_id": self.module_id,
+            "filename": self.filename,
+            "filepath": self.filepath,
+            "size": self.size,
+            "mimetype": self.mimetype,
+            "modified_at": self.modified_at,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,7 +335,8 @@ class ModuleSummary:
             "name": self.name,
             "visible": self.visible,
             "url": self.url,
-            "source_ref_id": None,
+            "source_ref_id": self.files[0].source_ref_id if self.files else None,
+            "files": [item.to_dict() for item in self.files],
         }
 
 

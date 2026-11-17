@@ -1,11 +1,15 @@
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from moallem.api.app import create_app
 from moallem.config import Environment, Settings
 from moallem.domain.authorization import StaticPolicy
+from moallem.domain.membership import ActiveContext
+from moallem.domain.secrets import InMemoryVault
+from moallem.moodle.service import ConnectionStatus, MoodleConnection, new_connection_repository
 from moallem.domain.membership import (
     InMemoryMembershipRepository,
     Membership,
@@ -72,6 +76,74 @@ def test_task_creation_reports_unconfigured_database_instead_of_faking_success()
 
     assert response.status_code == 503
     assert response.json()["code"] == "INTERNAL_ERROR"
+
+
+def test_create_task_returns_versioned_status_and_events_urls() -> None:
+    context_connection_id = str(uuid.uuid4())
+    ctx_vault = InMemoryVault()
+    membership_repo = InMemoryMembershipRepository(
+        {
+            _MEMBERSHIP_ID: Membership(
+                membership_id=_MEMBERSHIP_ID,
+                user_id=_USER_ID,
+                tenant_id=_TENANT_ID,
+                roles=("TEACHER",),
+                status=MembershipStatus.ACTIVE,
+            )
+        }
+    )
+    connection_repo = new_connection_repository()
+    active_context = ActiveContext(_USER_ID, _MEMBERSHIP_ID, _TENANT_ID, ("TEACHER",))
+    secret_ref = ctx_vault.put(active_context, "synthetic-moodle-token")
+    connection_repo.add(
+        active_context,
+        MoodleConnection(
+            context_connection_id,
+            _TENANT_ID,
+            "https://moodle.example.edu",
+            secret_ref,
+            ConnectionStatus.ACTIVE,
+            42,
+        ),
+    )
+    app = create_app(
+        Settings(
+            env=Environment.TEST,
+            idempotency_hmac_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            idempotency_retention_seconds=86400,
+            _env_file=None,
+        ),
+        checks=[],
+        membership_repo=membership_repo,
+        permission_policy=StaticPolicy({"TEACHER": frozenset({"task.create"})}),
+    )
+
+    class TaskRepository:
+        def create_idempotent(self, _context, **_kwargs):
+            return SimpleNamespace(
+                task=SimpleNamespace(
+                    task_id=str(uuid.uuid4()), created_at=datetime.now(UTC)
+                )
+            )
+
+    app.state.task_repository = TaskRepository()
+    app.state.moodle_connection_repository = connection_repo
+    response = TestClient(app).post(
+        "/api/v1/tasks",
+        headers={
+            "X-Dev-User-ID": _USER_ID,
+            "X-Active-Membership-ID": _MEMBERSHIP_ID,
+            "Idempotency-Key": "x" * 22,
+        },
+        json={
+            **_payload(),
+            "connection_id": context_connection_id,
+        },
+    )
+    assert response.status_code == 202
+    task_id = response.json()["task_id"]
+    assert response.json()["status_url"] == f"/api/v1/tasks/{task_id}"
+    assert response.json()["events_url"] == f"/api/v1/tasks/{task_id}/events"
 
 
 def test_task_request_rejects_unknown_fields_without_echoing_values() -> None:

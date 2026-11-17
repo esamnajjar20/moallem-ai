@@ -282,6 +282,16 @@ def test_include_file_metadata_false_skips_files() -> None:
     assert all_files(res) == []
 
 
+def test_file_provenance_serializes_safe_metadata_without_download_path() -> None:
+    res, *_ = _contents()
+    module = res.sections[0].modules[0]
+    payload = module.to_dict()
+    assert payload["source_ref_id"] == all_files(res)[0].source_ref_id
+    assert payload["files"][0]["filename"] == "notes.pdf"
+    assert "download_path" not in payload["files"][0]
+    assert "token" not in repr(payload).lower()
+
+
 def test_to_dict_matches_contract_section_shape() -> None:
     res, *_ = _contents()
     d = res.sections[0].to_dict()
@@ -293,6 +303,7 @@ def test_to_dict_matches_contract_section_shape() -> None:
         "visible",
         "url",
         "source_ref_id",
+        "files",
     }
 
 

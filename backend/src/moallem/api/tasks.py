@@ -105,8 +105,8 @@ def create_task(
     return CreateTaskResponse(
         task_id=uuid.UUID(result.task.task_id),
         task_status="RECEIVED",
-        status_url=f"/tasks/{result.task.task_id}",
-        events_url=f"/tasks/{result.task.task_id}/events",
+        status_url=f"/api/v1/tasks/{result.task.task_id}",
+        events_url=f"/api/v1/tasks/{result.task.task_id}/events",
         created_at=result.task.created_at,
         request_id=request_id,
     )

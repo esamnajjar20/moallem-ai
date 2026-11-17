@@ -23,7 +23,8 @@ from moallem.moodle.read import (
     CoursePage,
     discover_capabilities,
     get_course_contents,
-    list_teacher_courses,
+    list_enrolled_courses,
+    require_course_enrollment,
 )
 from moallem.moodle.url_policy import PrivateNetworkProfile, Resolver, normalize_site_url
 
@@ -112,7 +113,7 @@ class MoodleReadService:
         client, conn = self._client(ctx, connection_id, PERM_COURSE_READ)
         if conn.moodle_user_id is None:
             raise ConnectionNotActive("connection has no validated moodle user")
-        return list_teacher_courses(
+        return list_enrolled_courses(
             client, moodle_user_id=conn.moodle_user_id, cursor=cursor, page_size=page_size
         )
 
@@ -125,6 +126,11 @@ class MoodleReadService:
         include_file_metadata: bool = True,
     ) -> CourseContents:
         client, conn = self._client(ctx, connection_id, PERM_COURSE_CONTENT_READ)
+        if conn.moodle_user_id is None:
+            raise ConnectionNotActive("connection has no validated moodle user")
+        require_course_enrollment(
+            client, moodle_user_id=conn.moodle_user_id, course_id=course_id
+        )
         return get_course_contents(
             client,
             connection_id=conn.connection_id,

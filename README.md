@@ -14,11 +14,11 @@ Planning baseline: Moallem AI Engineering Documentation v2.4.
   [#44072361770](https://github.com/esamnajjar20/moallem-ai/actions/runs/44072361770) succeeded on
   main for Backend, Android, unsigned iOS, and Secret Scan. See `docs/PHASE1_STATUS.md`; ADR-015
   and ADR-016 remain provisional.
-- **P3 read adapter:** code and synthetic-fixture tests exist (`backend/src/moallem/moodle/`); it is unverified against a real Moodle. See `docs/PHASE3_STATUS.md`.
+- **P3 read adapter:** code and synthetic-fixture tests exist (`backend/src/moallem/moodle/`); versioned routes are exposed under `/api/v1`, course context reads verify enrolment of the connected Moodle principal, and safe file provenance metadata is returned. This is not proof of a teacher role, and the adapter remains unverified against a real Moodle. See `docs/PHASE3_STATUS.md`.
 - **P4 persistence and queue:** PostgreSQL task/idempotency/event/outbox writes, tenant-scoped Inbox consumer, fail-closed dead-letter recovery service, worker leases/retries, and migrations are locally verified. No production task handler or admin recovery API is configured; `DenyAllPolicy` remains the default. These worktree changes are not in the green CI commit; production key custody and operations remain incomplete. See `docs/PHASE4_STATUS.md`.
 - **P5 AI Gateway + secure file provenance:** application-side provider/storage/scanner/sandbox HTTP clients and fail-closed pipelines are implemented as opt-in adapters. `DenyAllAIExecution` remains the default; no provider or file service is enabled. P5 remains **PARTIAL / NOT READY** pending ADR-018/P0-09, DEC-028/029 approvals, production budget/reconciliation, actual storage/scanner/parser deployments, and PostgreSQL/Python 3.12 validation. See `docs/PHASE5_STATUS.md` and `docs/P5_CLOSURE_REPORT_AR.md`. Current local verification: 406 backend tests passed, 45 PostgreSQL tests skipped, one environment failure due missing `psycopg`; do not treat this as a production gate pass.
 - ADR-015 (Riverpod) and ADR-016 (mypy) remain provisional pending owner sign-off.
-- P2 remains partial; the Moodle adapter has no live staging verification. The worker starts without handlers only in an idle, fail-closed mode and logs unsupported task types without claiming them.
+- P2 remains partial; connection enrollment/rotation/disconnect HTTP operations and the approved permission matrix are not complete. The Moodle adapter has no live staging verification. The worker starts without handlers only in an idle, fail-closed mode and logs unsupported task types without claiming them.
 
 ## Repository layout
 

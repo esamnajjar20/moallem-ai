@@ -63,12 +63,13 @@ def test_course_read_route_parameters_match_openapi_contract() -> None:
     client, _headers = _client()
     spec = yaml.safe_load(_CONTRACT.read_text(encoding="utf-8"))
     generated = client.app.openapi()
-    for path, operation_id in (
-        ("/courses", "listTeacherCourses"),
+    for contract_path, operation_id in (
+        ("/courses", "listEnrolledCourses"),
         ("/courses/{course_id}/context", "getCourseContext"),
     ):
-        contract_operation = spec["paths"][path]["get"]
-        generated_operation = generated["paths"][path]["get"]
+        generated_path = f"/api/v1{contract_path}"
+        contract_operation = spec["paths"][contract_path]["get"]
+        generated_operation = generated["paths"][generated_path]["get"]
         assert contract_operation["operationId"] == operation_id
         assert generated_operation["operationId"] == operation_id
         expected = _contract_parameters(contract_operation)
@@ -79,12 +80,25 @@ def test_course_read_route_parameters_match_openapi_contract() -> None:
         assert membership["schema"]["type"] == "string"
 
 
+def test_versioned_routes_are_canonical_and_legacy_aliases_are_hidden() -> None:
+    client, headers = _client()
+    paths = client.app.openapi()["paths"]
+    assert "/api/v1/courses" in paths
+    assert "/api/v1/courses/{course_id}/context" in paths
+    assert "/courses" not in paths
+    # Compatibility route remains callable for older installations but is not advertised.
+    legacy = client.get(
+        "/courses?connection_id=00000000-0000-4000-8000-000000000001", headers=headers
+    )
+    assert legacy.status_code == 503
+
+
 def test_course_read_routes_fail_closed_until_connection_repository_exists() -> None:
     client, headers = _client()
     responses = (
-        client.get("/courses?connection_id=00000000-0000-4000-8000-000000000001", headers=headers),
+        client.get("/api/v1/courses?connection_id=00000000-0000-4000-8000-000000000001", headers=headers),
         client.get(
-            "/courses/42/context?connection_id=00000000-0000-4000-8000-000000000001",
+            "/api/v1/courses/42/context?connection_id=00000000-0000-4000-8000-000000000001",
             headers=headers,
         ),
     )
@@ -98,7 +112,7 @@ def test_course_read_routes_require_membership_context_header() -> None:
     client, headers = _client()
     del headers["X-Active-Membership-ID"]
     response = client.get(
-        "/courses?connection_id=00000000-0000-4000-8000-000000000001",
+        "/api/v1/courses?connection_id=00000000-0000-4000-8000-000000000001",
         headers=headers,
     )
     assert response.status_code == 400
@@ -136,7 +150,25 @@ def test_course_routes_call_moodle_read_service() -> None:
                 "name": "Week 1",
                 "visible": 1,
                 "summary": "<p>Introduction</p>",
-                "modules": [{"id": 3, "modname": "resource", "name": "Reading", "visible": 1}],
+                "modules": [
+                    {
+                        "id": 3,
+                        "modname": "resource",
+                        "name": "Reading",
+                        "visible": 1,
+                        "contents": [
+                            {
+                                "type": "file",
+                                "filename": "chapter.pdf",
+                                "filepath": "/",
+                                "filesize": 2048,
+                                "mimetype": "application/pdf",
+                                "timemodified": 1790000000,
+                                "fileurl": "https://moodle.example.edu/webservice/pluginfile.php/3/chapter.pdf",
+                            }
+                        ],
+                    }
+                ],
             }
         ],
     )
@@ -157,11 +189,11 @@ def test_course_routes_call_moodle_read_service() -> None:
     )
     client = TestClient(app)
     courses = client.get(
-        f"/courses?connection_id={connection_id}",
+        f"/api/v1/courses?connection_id={connection_id}",
         headers=headers,
     )
     contents = client.get(
-        f"/courses/8/context?connection_id={connection_id}",
+        f"/api/v1/courses/8/context?connection_id={connection_id}",
         headers=headers,
     )
 
@@ -171,4 +203,8 @@ def test_course_routes_call_moodle_read_service() -> None:
     assert contents.status_code == 200
     assert contents.json()["course_id"] == "8"
     assert contents.json()["sections"][0]["summary"] == "Introduction"
-    assert contents.json()["source_refs"] == []
+    source_ref = contents.json()["source_refs"][0]
+    file_payload = contents.json()["sections"][0]["modules"][0]["files"][0]
+    assert file_payload["source_ref_id"] == source_ref
+    assert file_payload["filename"] == "chapter.pdf"
+    assert "download_path" not in file_payload

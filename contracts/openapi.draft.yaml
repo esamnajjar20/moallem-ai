@@ -110,7 +110,11 @@ paths:
           $ref: '#/components/responses/InternalServerError'
   /courses:
     get:
-      operationId: listTeacherCourses
+      operationId: listEnrolledCourses
+      description: >-
+        Returns courses in which the linked Moodle principal is enrolled. Moodle does not
+        provide a teacher-role guarantee through this operation. Do not use this list alone
+        to authorize quiz creation or any Moodle write operation.
       parameters:
       - $ref: '#/components/parameters/ActiveMembership'
       - in: query
@@ -136,6 +140,8 @@ paths:
           $ref: '#/components/responses/ValidationError'
         '500':
           $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '400':
           $ref: '#/components/responses/BadRequest'
         '429':
@@ -171,6 +177,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
         '400':
           $ref: '#/components/responses/BadRequest'
         '429':
@@ -1519,6 +1527,46 @@ components:
           - string
           - 'null'
           format: uuid
+        files:
+          type: array
+          description: Safe file provenance metadata; never includes Moodle download URLs or tokens.
+          items:
+            $ref: '#/components/schemas/CourseFileReference'
+    CourseFileReference:
+      type: object
+      additionalProperties: false
+      required:
+      - source_ref_id
+      - module_id
+      - filename
+      - filepath
+      properties:
+        source_ref_id:
+          type: string
+          format: uuid
+        module_id:
+          type: string
+        filename:
+          type: string
+          maxLength: 255
+        filepath:
+          type: string
+          maxLength: 512
+        size:
+          type:
+          - integer
+          - 'null'
+          minimum: 0
+        mimetype:
+          type:
+          - string
+          - 'null'
+          maxLength: 127
+        modified_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
     CourseSection:
       type: object
       additionalProperties: false

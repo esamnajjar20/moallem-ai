@@ -85,6 +85,16 @@ def test_inactive_connection_blocked_before_secret_reveal(status: ConnectionStat
     assert t.calls == []
 
 
+def test_course_contents_rejects_course_not_enrolled_by_connected_principal() -> None:
+    from moallem.moodle.errors import MoodlePermissionDenied
+
+    svc, t = _svc()
+    with pytest.raises(MoodlePermissionDenied):
+        svc.course_contents(A, "c1", "999")
+    # Only the enrollment lookup is sent; content for an out-of-scope course is never fetched.
+    assert [call["form"]["wsfunction"] for call in t.calls] == ["core_enrol_get_users_courses"]
+
+
 def test_courses_need_a_validated_moodle_user() -> None:
     svc, _ = _svc(user_id=None)
     with pytest.raises(ConnectionNotActive):
