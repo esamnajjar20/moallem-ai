@@ -6,7 +6,7 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from moallem.domain.errors import TaskStateConflict
@@ -176,30 +176,10 @@ class PostgresOutboxRepository:
         lease: timedelta,
         now: datetime | None = None,
     ) -> bool:
-        timestamp = now or datetime.now(UTC)
-        _aware(timestamp)
+        if now is not None:
+            _aware(now)
         if lease <= timedelta(0):
             raise ValueError("lease must be positive")
-        with session_scope(self._sessions) as session:
-            updated_id = session.scalar(
-                update(OutboxEventModel)
-                .where(
-                    OutboxEventModel.event_id == uuid.UUID(claim.event_id),
-                    OutboxEventModel.tenant_id == uuid.UUID(claim.tenant_id),
-                    OutboxEventModel.task_id == uuid.UUID(claim.task_id),
-                    OutboxEventModel.status == "LEASED",
-                    OutboxEventModel.lease_owner == claim.owner,
-                    OutboxEventModel.lease_generation == claim.generation,
-                    OutboxEventModel.lease_expires_at > timestamp,
-                )
-                .values(lease_expires_at=timestamp + lease)
-                .returning(OutboxEventModel.event_id)
-            )
-            return updated_id is not None
-
-    def acknowledge(self, claim: OutboxClaim, *, now: datetime | None = None) -> bool:
-        timestamp = now or datetime.now(UTC)
-        _aware(timestamp)
         with session_scope(self._sessions) as session:
             row = session.scalar(
                 select(OutboxEventModel)
@@ -210,6 +190,29 @@ class PostgresOutboxRepository:
                 )
                 .with_for_update()
             )
+            timestamp = now or datetime.now(UTC)
+            if row is None or not _claim_matches(row, claim, timestamp):
+                return False
+            row.lease_expires_at = timestamp + lease
+            session.flush()
+            return True
+
+    def acknowledge(self, claim: OutboxClaim, *, now: datetime | None = None) -> bool:
+        if now is not None:
+            _aware(now)
+        with session_scope(self._sessions) as session:
+            row = session.scalar(
+                select(OutboxEventModel)
+                .where(
+                    OutboxEventModel.event_id == uuid.UUID(claim.event_id),
+                    OutboxEventModel.tenant_id == uuid.UUID(claim.tenant_id),
+                    OutboxEventModel.task_id == uuid.UUID(claim.task_id),
+                )
+                .with_for_update()
+            )
+            # Capture the clock only after FOR UPDATE returns. A timestamp captured before
+            # waiting for this row lock can incorrectly authorize an expired lease.
+            timestamp = now or datetime.now(UTC)
             if row is None or not _claim_matches(row, claim, timestamp):
                 return False
             row.status = "PUBLISHED"
@@ -241,8 +244,8 @@ class PostgresOutboxRepository:
         retry_at: datetime,
         now: datetime | None = None,
     ) -> str | None:
-        timestamp = now or datetime.now(UTC)
-        _aware(timestamp)
+        if now is not None:
+            _aware(now)
         _aware(retry_at)
         if not _ERROR_CODE.fullmatch(error_code):
             raise ValueError("error_code must be a non-sensitive stable code")
@@ -259,6 +262,8 @@ class PostgresOutboxRepository:
                 )
                 .with_for_update()
             )
+            # Check lease ownership against the post-lock time, not the time before waiting.
+            timestamp = now or datetime.now(UTC)
             if outbox is None or not _claim_matches(outbox, claim, timestamp):
                 return None
 
@@ -270,6 +275,10 @@ class PostgresOutboxRepository:
                 )
                 .with_for_update()
             )
+            # The task lock can itself block. Re-check fencing after acquiring both locks.
+            timestamp = now or datetime.now(UTC)
+            if not _claim_matches(outbox, claim, timestamp):
+                return None
             if task is None:
                 outbox.status = "DEAD_LETTER"
                 disposition = "DEAD_LETTER"

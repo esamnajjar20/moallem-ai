@@ -2,13 +2,38 @@
 
 **Status: PARTIAL, NOT CLOSED.** PostgreSQL `FOR UPDATE SKIP LOCKED` is the approved MVP queue.
 Task persistence, the Outbox worker, Inbox processing, and protected dead-letter recovery are
-implemented and locally verified against PostgreSQL. There are no production task handlers, no
-configured administrative authorization, and no CI result for this worktree.
+implemented. The historical PostgreSQL verification below predates the independent P4 remediation
+and must not be treated as a fresh verification of the current tree. See `docs/P4_REMEDIATION.md`
+for the fixes, added test coverage, current environment limits, and outstanding release gate.
+There are no production task handlers, no configured administrative authorization, and no CI result
+for this worktree.
+
+## Status after independent audit — 2026-11-17
+
+- Recovery event serialization now includes `TASK_RECOVERED` in the API enum and OpenAPI contract.
+- Outbox, Task transition, and Inbox paths validate fencing/lease expiry after acquiring their row
+  locks. Inbox processing revalidates after handler execution and flush so stale handler effects roll
+  back instead of committing as `PROCESSED`.
+- Legacy unscoped Inbox receipts are preserved as fail-closed deduplication tombstones. Historical
+  `PROCESSING` receipts without provable lease/tenant ownership are quarantined as non-retryable
+  `FAILED` with `LEGACY_PROCESSING_OUTCOME_UNKNOWN`.
+- Handler registration validates an async `execute` method before the worker can claim the type.
+- PostgreSQL fault-injection and migration tests were added, but they have not been run in this
+  remediation environment. The environment has Python 3.13.5 only, no project Python 3.12.16, no
+  PostgreSQL server/client, and no `MOALLEM_TEST_DATABASE_URL`. Do not count skipped PostgreSQL
+  tests as passing.
+- Current Alembic head is expected to be `9d4e7a2c1b60`; confirm with `alembic heads` and a live
+  `alembic check` against the target PostgreSQL version before release.
+
+**Current release gate: PARTIAL / NOT READY.** Do not close P4 until the complete PostgreSQL suite,
+Alembic drift check, and downgrade/re-upgrade path pass on Python 3.12.16 with a disposable PostgreSQL
+15+ database. P5 external handlers/source adapters, P9 database hardening/operations, and P11 admin
+recovery UI remain separate planned work.
 
 ## Implemented
 
 - SQLAlchemy models and migrations cover tenant-scoped tasks, events, idempotency, Outbox, Inbox,
-  and task-recovery lineage. The current Alembic revision is `8c3f1a4d2b90`.
+  and task-recovery lineage. The original P4 Alembic revision was `8c3f1a4d2b90`; after the independent remediation the expected head is `9d4e7a2c1b60`.
 - `PostgresTaskRepository.create_idempotent` persists the idempotency record, task, initial event,
   and Outbox row in one transaction. Rollback, duplicate requests, and concurrent creation are
   tested. PostgreSQL composite foreign keys prevent cross-tenant Moodle connections and task
@@ -34,7 +59,9 @@ configured administrative authorization, and no CI result for this worktree.
 - Worker retry behavior includes exponential backoff and jitter, max attempts, lease renewal,
   fencing, and graceful shutdown. Bounded idempotency cleanup excludes unresolved operations.
 
-## Verification evidence
+## Historical verification evidence before independent remediation
+
+The results in this table belong to the earlier P4 baseline at revision `8c3f1a4d2b90`; they do not validate the new `9d4e7a2c1b60` migration or the remediation changes above.
 
 | Check | Result |
 |---|---|

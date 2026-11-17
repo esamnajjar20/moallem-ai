@@ -1,6 +1,7 @@
 """At-least-once PostgreSQL task worker with bounded retries and graceful shutdown."""
 
 import asyncio
+import inspect
 import logging
 import random
 import re
@@ -110,6 +111,9 @@ class TaskHandlerRegistry:
             raise ValueError("task_type must be a stable uppercase identifier")
         if task_type in self._handlers:
             raise ValueError(f"handler already registered for {task_type}")
+        execute = getattr(handler, "execute", None)
+        if not callable(execute) or not inspect.iscoroutinefunction(execute):
+            raise ValueError("handler.execute must be an async callable")
         self._handlers[task_type] = handler
 
     def get(self, task_type: str) -> TaskHandler:

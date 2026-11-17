@@ -1039,6 +1039,7 @@ components:
           - EXTERNAL_DISPATCHED
           - EXTERNAL_OUTCOME_UNKNOWN
           - RECONCILIATION_UPDATED
+          - TASK_RECOVERED
           - TASK_COMPLETED
           - TASK_FAILED
         from_status:

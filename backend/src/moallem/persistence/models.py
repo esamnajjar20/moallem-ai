@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -13,6 +14,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -120,6 +122,7 @@ class TaskModel(Base):
     __tablename__ = "tasks"
     __table_args__ = (
         UniqueConstraint("tenant_id", "id", name="uq_tasks_tenant_id_id"),
+        UniqueConstraint("tenant_id", "id", "course_id", name="uq_tasks_tenant_id_course"),
         UniqueConstraint("tenant_id", "retry_of_task_id", name="uq_tasks_tenant_retry_parent"),
         ForeignKeyConstraint(
             ["tenant_id", "actor_membership_id"],
@@ -317,6 +320,13 @@ class InboxReceiptModel(Base):
         ),
         Index("ix_inbox_created", "created_at"),
         Index("ix_inbox_retry_due", "state", "next_attempt_at"),
+        Index(
+            "uq_inbox_legacy_unscoped_dedup",
+            "consumer",
+            "message_id",
+            unique=True,
+            postgresql_where=text("tenant_id IS NULL"),
+        ),
         CheckConstraint(
             "state IN ('RECEIVED', 'PROCESSING', 'PROCESSED', 'FAILED')",
             name="ck_inbox_receipt_state",
@@ -350,3 +360,259 @@ class InboxReceiptModel(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AIUsageLedgerModel(Base):
+    """Append-only AI accounting identity; lifecycle fields are finalized once."""
+
+    __tablename__ = "ai_usage_ledger"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "task_id", "invocation_id", name="uq_ai_usage_task_invocation"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id", "course_id"],
+            ["tasks.tenant_id", "tasks.id", "tasks.course_id"],
+            name="fk_ai_usage_task_course",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "actor_membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_ai_usage_actor_membership",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_ai_usage_tenant_started", "tenant_id", "started_at"),
+        Index("ix_ai_usage_tenant_task", "tenant_id", "task_id"),
+        CheckConstraint(
+            "state IN ('STARTED', 'SUCCEEDED', 'FAILED', 'UNKNOWN')",
+            name="ck_ai_usage_state",
+        ),
+        CheckConstraint("octet_length(request_hash) = 64", name="ck_ai_usage_request_hash"),
+        CheckConstraint(
+            "request_hash ~ '^[0-9a-f]{64}$'", name="ck_ai_usage_request_hash_hex"
+        ),
+        CheckConstraint(
+            "response_hash IS NULL OR octet_length(response_hash) = 64",
+            name="ck_ai_usage_response_hash",
+        ),
+        CheckConstraint(
+            "response_hash IS NULL OR response_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_ai_usage_response_hash_hex",
+        ),
+        CheckConstraint(
+            "input_tokens IS NULL OR input_tokens >= 0", name="ck_ai_usage_input_tokens"
+        ),
+        CheckConstraint(
+            "output_tokens IS NULL OR output_tokens >= 0", name="ck_ai_usage_output_tokens"
+        ),
+        CheckConstraint("cost_amount IS NULL OR cost_amount >= 0", name="ck_ai_usage_cost"),
+        CheckConstraint("budget_reserved_amount > 0", name="ck_ai_usage_budget_reserved"),
+        CheckConstraint("budget_currency ~ '^[A-Z]{3}$'", name="ck_ai_usage_budget_currency"),
+        CheckConstraint(
+            "(cost_amount IS NULL AND currency IS NULL) OR "
+            "(cost_amount IS NOT NULL AND currency ~ '^[A-Z]{3}$')",
+            name="ck_ai_usage_currency",
+        ),
+        CheckConstraint(
+            "(state = 'STARTED' AND finished_at IS NULL) OR "
+            "(state <> 'STARTED' AND finished_at IS NOT NULL)",
+            name="ck_ai_usage_finished_state",
+        ),
+        CheckConstraint(
+            "state <> 'SUCCEEDED' OR "
+            "(input_tokens IS NOT NULL AND output_tokens IS NOT NULL "
+            "AND cost_amount IS NOT NULL AND currency IS NOT NULL "
+            "AND response_hash IS NOT NULL)",
+            name="ck_ai_usage_success_complete",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    task_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    course_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    actor_membership_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    invocation_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    provider_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    model_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    region: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    pricing_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    permit_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    privacy_policy_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    budget_reservation_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    budget_reserved_amount: Mapped[Decimal] = mapped_column(Numeric(24, 12), nullable=False)
+    budget_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_hash: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(16), nullable=False, server_default="STARTED")
+    input_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    output_tokens: Mapped[int | None] = mapped_column(BigInteger)
+    cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(24, 12))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SourceFileModel(Base):
+    """Tenant/course-scoped file metadata; bytes remain in private quarantine storage."""
+
+    __tablename__ = "source_files"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_source_files_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "id", "version", "course_id", name="uq_source_files_provenance_scope"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "uploaded_by_membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_source_files_uploader_membership",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id", "course_id"],
+            ["tasks.tenant_id", "tasks.id", "tasks.course_id"],
+            name="fk_source_files_task_course",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_source_files_tenant_course_state", "tenant_id", "course_id", "state"),
+        Index("ix_source_files_tenant_hash", "tenant_id", "sha256"),
+        CheckConstraint("version >= 1", name="ck_source_files_version"),
+        CheckConstraint("byte_size > 0", name="ck_source_files_byte_size"),
+        CheckConstraint("octet_length(sha256) = 64", name="ck_source_files_sha256"),
+        CheckConstraint("sha256 ~ '^[0-9a-f]{64}$'", name="ck_source_files_sha256_hex"),
+        CheckConstraint(
+            "length(storage_ref) > 0 AND storage_ref = btrim(storage_ref) "
+            "AND storage_ref !~ '[[:space:]]' AND storage_ref !~ '[[:cntrl:]]' "
+            "AND storage_ref !~ '[?#]' AND storage_ref !~ '^//' "
+            "AND (storage_ref !~* '^[a-z][a-z0-9+.-]*:' "
+            "OR storage_ref ~* '^(s3|gs|gcs|az|azure|r2)://[^/@?#]+(/[^?#]*)?$')",
+            name="ck_source_files_private_storage_ref",
+        ),
+        CheckConstraint(
+            "state IN ('QUARANTINED', 'CLEAN', 'REJECTED', 'EXTRACTED', 'FAILED')",
+            name="ck_source_files_state",
+        ),
+        CheckConstraint("page_count IS NULL OR page_count >= 0", name="ck_source_files_pages"),
+        CheckConstraint("chunk_count >= 0", name="ck_source_files_chunks"),
+        CheckConstraint(
+            "state <> 'EXTRACTED' OR (extractor_version IS NOT NULL AND chunk_count > 0)",
+            name="ck_source_files_extracted_complete",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    course_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    uploaded_by_membership_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    declared_mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    detected_mime_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    storage_ref: Mapped[str] = mapped_column(String(512), nullable=False)
+    extraction_profile: Mapped[str] = mapped_column(String(32), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, server_default="QUARANTINED")
+    scanner_id: Mapped[str | None] = mapped_column(String(128))
+    scanner_version: Mapped[str | None] = mapped_column(String(128))
+    scan_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    extractor_version: Mapped[str | None] = mapped_column(String(128))
+    page_count: Mapped[int | None] = mapped_column(Integer)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SourceChunkModel(Base):
+    """Extracted text with stable file/page/section/hash provenance."""
+
+    __tablename__ = "source_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "file_id", "file_version", "chunk_index", name="uq_source_chunk_order"
+        ),
+        UniqueConstraint("tenant_id", "id", name="uq_source_chunks_tenant_id"),
+        UniqueConstraint("tenant_id", "id", "course_id", name="uq_source_chunks_tenant_course"),
+        ForeignKeyConstraint(
+            ["tenant_id", "file_id", "file_version", "course_id"],
+            [
+                "source_files.tenant_id",
+                "source_files.id",
+                "source_files.version",
+                "source_files.course_id",
+            ],
+            name="fk_source_chunks_file_provenance",
+            ondelete="CASCADE",
+        ),
+        Index("ix_source_chunks_tenant_course_file", "tenant_id", "course_id", "file_id"),
+        CheckConstraint("chunk_index >= 0", name="ck_source_chunks_index"),
+        CheckConstraint("page_number IS NULL OR page_number >= 1", name="ck_source_chunks_page"),
+        CheckConstraint("length(content) > 0", name="ck_source_chunks_content"),
+        CheckConstraint("octet_length(content_hash) = 64", name="ck_source_chunks_hash"),
+        CheckConstraint(
+            "content_hash ~ '^[0-9a-f]{64}$'", name="ck_source_chunks_content_hash_hex"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    course_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    file_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    file_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    section_path: Mapped[str | None] = mapped_column(String(1024))
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class AIUsageSourceRefModel(Base):
+    """Tenant-safe many-to-many link from one AI invocation to evidence chunks."""
+
+    __tablename__ = "ai_usage_source_refs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id", "invocation_id"],
+            [
+                "ai_usage_ledger.tenant_id",
+                "ai_usage_ledger.task_id",
+                "ai_usage_ledger.invocation_id",
+            ],
+            name="fk_ai_usage_source_refs_usage",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id", "course_id"],
+            ["tasks.tenant_id", "tasks.id", "tasks.course_id"],
+            name="fk_ai_usage_source_refs_task_course",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "source_chunk_id", "course_id"],
+            ["source_chunks.tenant_id", "source_chunks.id", "source_chunks.course_id"],
+            name="fk_ai_usage_source_refs_chunk_course",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_ai_usage_source_refs_source", "tenant_id", "source_chunk_id"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    task_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    invocation_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    course_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_chunk_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)

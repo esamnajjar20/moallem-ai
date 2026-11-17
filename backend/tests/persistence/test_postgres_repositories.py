@@ -1,22 +1,30 @@
 import asyncio
 import base64
+import hashlib
 import os
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
-from threading import Barrier, Lock
+from threading import Barrier, Event, Lock, get_ident
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, delete, func, select, text, update
+from sqlalchemy import Engine, delete, event as sqlalchemy_event, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from moallem.ai.contracts import ProviderIdentity
+from moallem.ai.usage import (
+    UsageLedgerBeginResult,
+    UsageLedgerCompletion,
+    UsageLedgerStart,
+)
 from moallem.api.app import create_app
 from moallem.config import Environment, Settings
 from moallem.domain.authorization import StaticPolicy
@@ -29,10 +37,23 @@ from moallem.domain.membership import (
 from moallem.domain.secret_encryption import Aes256Gcm
 from moallem.domain.secrets import SecretRef
 from moallem.domain.tasks import TaskStatus
+from moallem.files.contracts import (
+    ExtractionProfile,
+    FileUpload,
+    PersistedChunkInput,
+    ScanResult,
+    ScanVerdict,
+    SourceFileRegistration,
+)
 from moallem.moodle.service import ConnectionStatus, MoodleConnection
+from moallem.persistence.ai_usage_repository import (
+    AIUsageSourceReferenceError,
+    PostgresAIUsageLedgerRepository,
+)
 from moallem.persistence.database import SessionFactory, create_database, session_scope
 from moallem.persistence.idempotency_repository import PostgresIdempotencyRepository
 from moallem.persistence.inbox_repository import (
+    InboxLegacyReceiptConflict,
     InboxLeaseLost,
     InboxMessage,
     InboxMessageConflict,
@@ -42,17 +63,22 @@ from moallem.persistence.inbox_repository import (
     RetryableInboxError,
 )
 from moallem.persistence.models import (
+    AIUsageLedgerModel,
+    AIUsageSourceRefModel,
     IdempotencyRecordModel,
     InboxReceiptModel,
     MembershipModel,
     OutboxEventModel,
     SecretVaultEntryModel,
+    SourceChunkModel,
+    SourceFileModel,
     TaskEventModel,
     TaskModel,
     TenantModel,
     UserModel,
 )
-from moallem.persistence.outbox_repository import PostgresOutboxRepository
+from moallem.persistence.outbox_repository import LeaseLost, PostgresOutboxRepository
+from moallem.persistence.source_file_repository import PostgresSourceFileRepository
 from moallem.persistence.repositories import (
     PostgresMembershipRepository,
     PostgresSubjectMapper,
@@ -87,6 +113,56 @@ class PostgresTaskEnvironment:
     context: ActiveContext
     connection_id: str
     tasks: PostgresTaskRepository
+
+
+def _run_after_a_row_lock_expires(
+    engine: Engine,
+    *,
+    model: type,
+    row_filter: object,
+    table_name: str,
+    lease_expires_at: datetime,
+    operation,
+):
+    """Hold a row lock until its lease expires, then release the waiting worker.
+
+    The SQLAlchemy event proves the worker reached the SELECT ... FOR UPDATE after its
+    repository method had started. The deliberate wait is tied to the real lease deadline,
+    rather than an arbitrary sleep used to mask a scheduling race.
+    """
+    query_started = Event()
+    worker_thread_id: int | None = None
+
+    def observe_query(_connection, _cursor, statement, _parameters, _context, _many) -> None:
+        if (
+            worker_thread_id == get_ident()
+            and table_name in statement.lower()
+            and "for update" in statement.lower()
+        ):
+            query_started.set()
+
+    sqlalchemy_event.listen(engine, "before_cursor_execute", observe_query)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with Session(engine) as lock_session:
+                with lock_session.begin():
+                    lock_session.scalar(
+                        select(model).where(row_filter).with_for_update()
+                    )
+
+                    def invoke():
+                        nonlocal worker_thread_id
+                        worker_thread_id = get_ident()
+                        return operation()
+
+                    future = pool.submit(invoke)
+                    assert query_started.wait(timeout=5), "worker did not reach its row-lock query"
+                    while datetime.now(UTC) < lease_expires_at:
+                        remaining = (lease_expires_at - datetime.now(UTC)).total_seconds()
+                        Event().wait(min(max(remaining, 0), 0.05))
+            return future.result(timeout=5)
+    finally:
+        sqlalchemy_event.remove(engine, "before_cursor_execute", observe_query)
 
 
 @pytest.fixture
@@ -140,6 +216,20 @@ def postgres_task_environment() -> Iterator[PostgresTaskEnvironment]:
     finally:
         try:
             with session_scope(sessions) as session:
+                session.execute(
+                    delete(AIUsageSourceRefModel).where(
+                        AIUsageSourceRefModel.tenant_id == tenant_id
+                    )
+                )
+                session.execute(
+                    delete(SourceChunkModel).where(SourceChunkModel.tenant_id == tenant_id)
+                )
+                session.execute(
+                    delete(SourceFileModel).where(SourceFileModel.tenant_id == tenant_id)
+                )
+                session.execute(
+                    delete(AIUsageLedgerModel).where(AIUsageLedgerModel.tenant_id == tenant_id)
+                )
                 session.execute(
                     delete(InboxReceiptModel).where(InboxReceiptModel.tenant_id == tenant_id)
                 )
@@ -889,6 +979,79 @@ def test_outbox_lease_renewal_expiry_and_nonretryable_failure(
     assert environment.tasks.get(environment.context, task.task_id).status is TaskStatus.FAILED
 
 
+@pytest.mark.parametrize("operation", ["acknowledge", "renew", "fail"])
+def test_outbox_operations_reject_a_lease_expired_during_row_lock_wait(
+    postgres_task_environment: PostgresTaskEnvironment,
+    operation: str,
+) -> None:
+    environment = postgres_task_environment
+    task = _create_task(environment, str(uuid.uuid4()))
+    queue = PostgresOutboxRepository(environment.sessions)
+    claim = queue.claim_batch(
+        owner=f"lock-wait-{operation}", limit=1, lease=timedelta(seconds=1)
+    )[0]
+
+    def perform_operation():
+        if operation == "acknowledge":
+            return queue.acknowledge(claim)
+        if operation == "renew":
+            return queue.renew(claim, lease=timedelta(seconds=30))
+        return queue.fail(
+            claim,
+            error_code="LOCK_WAIT_EXPIRED",
+            retryable=True,
+            max_attempts=5,
+            retry_at=datetime.now(UTC) + timedelta(minutes=1),
+        )
+
+    result = _run_after_a_row_lock_expires(
+        environment.engine,
+        model=OutboxEventModel,
+        row_filter=OutboxEventModel.event_id == uuid.UUID(claim.event_id),
+        table_name="outbox_events",
+        lease_expires_at=claim.lease_expires_at,
+        operation=perform_operation,
+    )
+    assert result == {"acknowledge": False, "renew": False, "fail": None}[operation]
+
+    # A stale worker must leave the event available for the next generation.
+    recovered = queue.claim_batch(
+        owner=f"recovered-{operation}", limit=1, lease=timedelta(seconds=30)
+    )
+    assert len(recovered) == 1
+    assert recovered[0].task_id == task.task_id
+    assert recovered[0].generation == claim.generation + 1
+
+
+def test_task_transition_rejects_a_lease_expired_while_waiting_for_outbox_lock(
+    postgres_task_environment: PostgresTaskEnvironment,
+) -> None:
+    environment = postgres_task_environment
+    task = _create_task(environment, str(uuid.uuid4()))
+    queue = PostgresOutboxRepository(environment.sessions)
+    claim = queue.claim_batch(
+        owner="transition-lock-wait", limit=1, lease=timedelta(seconds=1)
+    )[0]
+
+    def perform_transition():
+        try:
+            return environment.tasks.transition_for_worker(claim, TaskStatus.PLANNING)
+        except LeaseLost as exc:
+            return exc
+
+    result = _run_after_a_row_lock_expires(
+        environment.engine,
+        model=OutboxEventModel,
+        row_filter=OutboxEventModel.event_id == uuid.UUID(claim.event_id),
+        table_name="outbox_events",
+        lease_expires_at=claim.lease_expires_at,
+        operation=perform_transition,
+    )
+    assert isinstance(result, LeaseLost)
+    assert environment.tasks.get(environment.context, task.task_id).status is TaskStatus.RECEIVED
+    assert len(environment.tasks.list_events(environment.context, task.task_id)) == 1
+
+
 def test_retry_exhaustion_dead_letters_and_fails_task_atomically(
     postgres_task_environment: PostgresTaskEnvironment,
 ) -> None:
@@ -1447,6 +1610,83 @@ def test_inbox_expired_lease_is_fenced_and_recovered(
     assert result.state == "PROCESSED" and result.acknowledge
 
 
+def test_inbox_claim_rechecks_expiry_after_waiting_for_receipt_lock(
+    postgres_task_environment: PostgresTaskEnvironment,
+) -> None:
+    environment = postgres_task_environment
+    consumer = PostgresInboxConsumer(
+        environment.sessions,
+        lease_seconds=1,
+        retry_policy=InboxRetryPolicy(max_attempts=3, base_delay_seconds=1, max_delay_seconds=10),
+    )
+    message = InboxMessage(
+        environment.context.tenant_id, "inbox-lock-wait", "receipt-lock-wait", {"v": 1}
+    )
+    original = consumer.claim(message, owner="inbox-lock-owner")
+    assert not isinstance(original, InboxResult)
+
+    result = _run_after_a_row_lock_expires(
+        environment.engine,
+        model=InboxReceiptModel,
+        row_filter=InboxReceiptModel.id == uuid.UUID(original.receipt_id),
+        table_name="inbox_receipts",
+        lease_expires_at=original.lease_expires_at,
+        operation=lambda: consumer.claim(message, owner="inbox-lock-recovery"),
+    )
+    assert not isinstance(result, InboxResult)
+    assert result.generation == original.generation + 1
+    assert result.owner == "inbox-lock-recovery"
+
+
+def test_inbox_handler_cannot_commit_after_its_lease_expires(
+    postgres_task_environment: PostgresTaskEnvironment,
+) -> None:
+    environment = postgres_task_environment
+    consumer = PostgresInboxConsumer(
+        environment.sessions,
+        lease_seconds=1,
+        retry_policy=InboxRetryPolicy(max_attempts=3, base_delay_seconds=1, max_delay_seconds=10),
+    )
+    message = InboxMessage(
+        environment.context.tenant_id, "inbox-handler-lease", "slow-handler", {"v": 2}
+    )
+    claim = consumer.claim(message, owner="slow-inbox-handler")
+    assert not isinstance(claim, InboxResult)
+    handler_started = Event()
+
+    class SlowHandler:
+        def process(self, session: Session, received: InboxMessage) -> str:
+            session.execute(
+                update(TenantModel)
+                .where(TenantModel.id == uuid.UUID(received.tenant_id))
+                .values(name="must rollback after lease expiry")
+            )
+            handler_started.set()
+            while datetime.now(UTC) < claim.lease_expires_at:
+                remaining = (claim.lease_expires_at - datetime.now(UTC)).total_seconds()
+                Event().wait(min(max(remaining, 0), 0.05))
+            return "stale-result"
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(consumer.process, claim, message, SlowHandler())
+        assert handler_started.wait(timeout=5)
+        while datetime.now(UTC) < claim.lease_expires_at:
+            remaining = (claim.lease_expires_at - datetime.now(UTC)).total_seconds()
+            Event().wait(min(max(remaining, 0), 0.05))
+        with pytest.raises(InboxLeaseLost):
+            future.result(timeout=5)
+
+    with session_scope(environment.sessions) as session:
+        tenant = session.get(TenantModel, uuid.UUID(environment.context.tenant_id))
+        receipt = session.get(InboxReceiptModel, uuid.UUID(claim.receipt_id))
+        assert tenant is not None and tenant.name == "Synthetic task tenant"
+        assert receipt is not None and receipt.state == "PROCESSING"
+
+    recovered = consumer.claim(message, owner="after-slow-handler")
+    assert not isinstance(recovered, InboxResult)
+    assert recovered.generation == claim.generation + 1
+
+
 def test_inbox_concurrent_delivery_has_one_transactional_handler_call(
     postgres_task_environment: PostgresTaskEnvironment,
 ) -> None:
@@ -1459,6 +1699,7 @@ def test_inbox_concurrent_delivery_has_one_transactional_handler_call(
     message = InboxMessage(
         environment.context.tenant_id, "concurrent-consumer", "same-message", {"value": 1}
     )
+    committed_tenant_name = "Inbox handler committed with receipt"
     barrier = Barrier(2)
     lock = Lock()
     calls = 0
@@ -1468,6 +1709,11 @@ def test_inbox_concurrent_delivery_has_one_transactional_handler_call(
             nonlocal calls
             with lock:
                 calls += 1
+            session.execute(
+                update(TenantModel)
+                .where(TenantModel.id == uuid.UUID(received.tenant_id))
+                .values(name=committed_tenant_name)
+            )
             return "one-result"
 
     def consume(owner: str) -> InboxResult:
@@ -1498,6 +1744,63 @@ def test_inbox_concurrent_delivery_has_one_transactional_handler_call(
             )
             == 1
         )
+        receipt = session.scalar(
+            select(InboxReceiptModel).where(
+                InboxReceiptModel.tenant_id == uuid.UUID(environment.context.tenant_id),
+                InboxReceiptModel.consumer == message.consumer,
+                InboxReceiptModel.message_id == message.message_id,
+            )
+        )
+        assert receipt is not None
+        assert receipt.state == "PROCESSED" and receipt.completed_at is not None
+        assert receipt.lease_owner is None and receipt.lease_expires_at is None
+        tenant = session.get(TenantModel, uuid.UUID(environment.context.tenant_id))
+        assert tenant is not None and tenant.name == committed_tenant_name
+
+
+def test_inbox_legacy_unscoped_receipt_is_never_reprocessed(
+    postgres_task_environment: PostgresTaskEnvironment,
+) -> None:
+    environment = postgres_task_environment
+    message = InboxMessage(
+        environment.context.tenant_id,
+        "legacy-consumer",
+        "legacy-global-message-id",
+        {"value": "new delivery"},
+    )
+    legacy_id = uuid.uuid4()
+    with session_scope(environment.sessions) as session:
+        session.add(
+            InboxReceiptModel(
+                id=legacy_id,
+                tenant_id=None,
+                consumer=message.consumer,
+                message_id=message.message_id,
+                state="PROCESSED",
+                payload_hash=None,
+            )
+        )
+    consumer = PostgresInboxConsumer(
+        environment.sessions,
+        lease_seconds=30,
+        retry_policy=InboxRetryPolicy(max_attempts=3, base_delay_seconds=1, max_delay_seconds=30),
+    )
+
+    with pytest.raises(InboxLegacyReceiptConflict, match="manual tenant reconciliation"):
+        consumer.claim(message, owner="legacy-redelivery")
+
+    with session_scope(environment.sessions) as session:
+        legacy = session.get(InboxReceiptModel, legacy_id)
+        tenant_scoped = session.scalar(
+            select(InboxReceiptModel).where(
+                InboxReceiptModel.tenant_id == uuid.UUID(environment.context.tenant_id),
+                InboxReceiptModel.consumer == message.consumer,
+                InboxReceiptModel.message_id == message.message_id,
+            )
+        )
+        assert legacy is not None and legacy.tenant_id is None and legacy.state == "PROCESSED"
+        assert tenant_scoped is None
+        session.delete(legacy)
 
 
 def test_inbox_deduplication_is_scoped_to_tenant(
@@ -1944,6 +2247,94 @@ def test_inbox_migration_round_trips_legacy_receipts(
             session.execute(delete(InboxReceiptModel).where(InboxReceiptModel.id == receipt_id))
 
 
+def test_inbox_migration_quarantines_legacy_processing_receipts(
+    postgres_task_environment: PostgresTaskEnvironment, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _DATABASE_URL is not None
+    environment = postgres_task_environment
+    monkeypatch.setenv("MOALLEM_DATABASE_URL", _DATABASE_URL)
+    alembic_config = _alembic_config()
+    receipt_id = uuid.uuid4()
+    environment.engine.dispose()
+
+    try:
+        command.downgrade(alembic_config, "6a1e9dce4f21")
+        with session_scope(environment.sessions) as session:
+            session.execute(
+                text(
+                    "INSERT INTO inbox_receipts "
+                    "(id, consumer, message_id, state) "
+                    "VALUES (:id, 'legacy-processing', 'ambiguous-effect', 'PROCESSING')"
+                ),
+                {"id": receipt_id},
+            )
+
+        command.upgrade(alembic_config, "head")
+        with session_scope(environment.sessions) as session:
+            receipt = session.get(InboxReceiptModel, receipt_id)
+            assert receipt is not None
+            assert receipt.tenant_id is None
+            assert receipt.state == "FAILED"
+            assert receipt.retryable is False
+            assert receipt.last_error_code == "LEGACY_PROCESSING_OUTCOME_UNKNOWN"
+            assert receipt.completed_at is not None
+
+        with pytest.raises(RuntimeError, match="cannot downgrade inbox processing data"):
+            command.downgrade(alembic_config, "6a1e9dce4f21")
+
+        with session_scope(environment.sessions) as session:
+            session.execute(delete(InboxReceiptModel).where(InboxReceiptModel.id == receipt_id))
+        command.downgrade(alembic_config, "6a1e9dce4f21")
+        command.upgrade(alembic_config, "head")
+    finally:
+        command.upgrade(alembic_config, "head")
+        with session_scope(environment.sessions) as session:
+            session.execute(delete(InboxReceiptModel).where(InboxReceiptModel.id == receipt_id))
+
+
+def test_followup_migration_quarantines_legacy_processing_after_8c_was_applied(
+    postgres_task_environment: PostgresTaskEnvironment, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _DATABASE_URL is not None
+    environment = postgres_task_environment
+    monkeypatch.setenv("MOALLEM_DATABASE_URL", _DATABASE_URL)
+    alembic_config = _alembic_config()
+    receipt_id = uuid.uuid4()
+    environment.engine.dispose()
+
+    try:
+        # Simulate a database that had already applied 8c before its compatibility
+        # correction. This PROCESSING receipt satisfies 8c's lease CHECK but still has
+        # no tenant attribution, so only revision 9d can quarantine it.
+        command.downgrade(alembic_config, "8c3f1a4d2b90")
+        with session_scope(environment.sessions) as session:
+            session.execute(
+                text(
+                    "INSERT INTO inbox_receipts "
+                    "(id, tenant_id, consumer, message_id, state, payload_hash, attempts, "
+                    "retryable, next_attempt_at, lease_owner, lease_expires_at, lease_generation) "
+                    "VALUES (:id, NULL, 'legacy-after-8c', 'in-flight-unknown', 'PROCESSING', "
+                    ":payload_hash, 1, false, now(), 'old-worker', "
+                    "now() + interval '30 seconds', 1)"
+                ),
+                {"id": receipt_id, "payload_hash": "b" * 64},
+            )
+
+        command.upgrade(alembic_config, "head")
+        with session_scope(environment.sessions) as session:
+            receipt = session.get(InboxReceiptModel, receipt_id)
+            assert receipt is not None
+            assert receipt.tenant_id is None
+            assert receipt.state == "FAILED"
+            assert receipt.retryable is False
+            assert receipt.last_error_code == "LEGACY_PROCESSING_OUTCOME_UNKNOWN"
+            assert receipt.lease_owner is None and receipt.lease_expires_at is None
+    finally:
+        command.upgrade(alembic_config, "head")
+        with session_scope(environment.sessions) as session:
+            session.execute(delete(InboxReceiptModel).where(InboxReceiptModel.id == receipt_id))
+
+
 def test_inbox_migration_refuses_downgrade_with_live_processing_receipt(
     postgres_task_environment: PostgresTaskEnvironment, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2013,3 +2404,251 @@ def test_task_recovery_migration_refuses_downgrade_with_retry_lineage(
     with session_scope(environment.sessions) as session:
         child = session.get(TaskModel, child_id)
         assert child is not None and child.retry_of_task_id == uuid.UUID(parent.task_id)
+
+
+def test_postgres_p5_ai_usage_idempotency_and_one_way_finalization(
+    postgres_task_environment: PostgresTaskEnvironment,
+) -> None:
+    environment = postgres_task_environment
+    task = _create_task(environment, str(uuid.uuid4()))
+    tenant_id = uuid.UUID(environment.context.tenant_id)
+    task_id = uuid.UUID(task.task_id)
+    membership_id = uuid.UUID(environment.context.membership_id)
+    invocation_id = uuid.uuid4()
+    repository = PostgresAIUsageLedgerRepository(environment.sessions)
+    identity = ProviderIdentity("synthetic-provider", "synthetic-model", "v1", "test-region")
+
+    def start(request_hash: str) -> UsageLedgerStart:
+        return UsageLedgerStart(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            course_id="synthetic-course",
+            actor_membership_id=membership_id,
+            invocation_id=invocation_id,
+            provider=identity,
+            prompt_version="synthetic-prompt-v1",
+            request_hash=request_hash,
+            permit_ref="synthetic-permit",
+            privacy_policy_ref="synthetic-privacy-approval",
+            budget_reservation_ref="synthetic-budget-reservation",
+            budget_reserved_amount=Decimal("1.000000000000"),
+            budget_currency="USD",
+            pricing_version="synthetic-pricing-v1",
+            source_refs=(),
+        )
+
+    request_hash = hashlib.sha256(b"same request").hexdigest()
+    assert repository.begin(start(request_hash)) is UsageLedgerBeginResult.CREATED
+    assert repository.begin(start(request_hash)) is UsageLedgerBeginResult.SAME_REQUEST
+    assert (
+        repository.begin(start(hashlib.sha256(b"different request").hexdigest()))
+        is UsageLedgerBeginResult.REQUEST_HASH_CONFLICT
+    )
+
+    completion = UsageLedgerCompletion(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        invocation_id=invocation_id,
+        response_hash=hashlib.sha256(b"synthetic response").hexdigest(),
+        input_tokens=17,
+        output_tokens=9,
+        cost_amount=Decimal("0.000017000000"),
+        currency="USD",
+    )
+    assert repository.complete(completion) is True
+    assert repository.complete(completion) is False
+
+    with session_scope(environment.sessions) as session:
+        row = session.scalar(
+            select(AIUsageLedgerModel).where(
+                AIUsageLedgerModel.tenant_id == tenant_id,
+                AIUsageLedgerModel.task_id == task_id,
+                AIUsageLedgerModel.invocation_id == invocation_id,
+            )
+        )
+        assert row is not None
+        assert row.state == "SUCCEEDED"
+        assert row.request_hash == request_hash
+        assert row.input_tokens == 17
+        assert row.output_tokens == 9
+        assert row.response_hash == completion.response_hash
+        assert row.cost_amount == completion.cost_amount
+
+
+def test_postgres_p5_source_file_extraction_is_scoped_and_hash_bound(
+    postgres_task_environment: PostgresTaskEnvironment,
+) -> None:
+    environment = postgres_task_environment
+    tenant_id = uuid.UUID(environment.context.tenant_id)
+    membership_id = uuid.UUID(environment.context.membership_id)
+    file_id = uuid.uuid4()
+    content = b"synthetic lesson source"
+    content_hash = hashlib.sha256(content).hexdigest()
+    upload = FileUpload(
+        file_id=file_id,
+        tenant_id=tenant_id,
+        course_id="synthetic-course",
+        uploaded_by_membership_id=membership_id,
+        task_id=None,
+        version=1,
+        original_filename="lesson.pdf",
+        declared_mime_type="application/pdf",
+        extraction_profile=ExtractionProfile.PDF_TEXT,
+    )
+    repository = PostgresSourceFileRepository(environment.sessions)
+    repository.create_quarantined(
+        SourceFileRegistration(
+            upload=upload,
+            detected_mime_type="application/pdf",
+            sha256=content_hash,
+            byte_size=len(content),
+            storage_ref=f"synthetic-private/{tenant_id}/{file_id}",
+        )
+    )
+    repository.record_scan_result(
+        upload, ScanResult(ScanVerdict.CLEAN, "synthetic-av", "1.0")
+    )
+    chunk_id = uuid.uuid4()
+    chunk_text = "verified course text"
+    chunk = PersistedChunkInput(
+        chunk_id=chunk_id,
+        chunk_index=0,
+        page_number=1,
+        section_path="Chapter 1",
+        content=chunk_text,
+        content_hash=hashlib.sha256(chunk_text.encode("utf-8")).hexdigest(),
+    )
+    repository.persist_extracted(
+        upload,
+        expected_sha256=content_hash,
+        extractor_version="synthetic-sandbox-v1",
+        page_count=1,
+        chunks=[chunk],
+    )
+
+    visible = repository.get_chunks(
+        tenant_id=tenant_id, course_id="synthetic-course", chunk_ids=[chunk_id]
+    )
+    assert len(visible) == 1
+    assert visible[0].content == chunk_text
+    assert visible[0].content_hash == chunk.content_hash
+    assert repository.get_chunks(
+        tenant_id=tenant_id, course_id="another-course", chunk_ids=[chunk_id]
+    ) == ()
+    assert repository.get_chunks(
+        tenant_id=uuid.uuid4(), course_id="synthetic-course", chunk_ids=[chunk_id]
+    ) == ()
+
+
+def test_postgres_p5_ai_source_ref_cross_course_failure_rolls_back_usage_row(
+    postgres_task_environment: PostgresTaskEnvironment,
+) -> None:
+    environment = postgres_task_environment
+    task = _create_task(environment, str(uuid.uuid4()))
+    tenant_id = uuid.UUID(environment.context.tenant_id)
+    membership_id = uuid.UUID(environment.context.membership_id)
+    file_id = uuid.uuid4()
+    file_content = b"another course source"
+    upload = FileUpload(
+        file_id=file_id,
+        tenant_id=tenant_id,
+        course_id="different-course",
+        uploaded_by_membership_id=membership_id,
+        task_id=None,
+        version=1,
+        original_filename="other.pdf",
+        declared_mime_type="application/pdf",
+        extraction_profile=ExtractionProfile.PDF_TEXT,
+    )
+    files = PostgresSourceFileRepository(environment.sessions)
+    files.create_quarantined(
+        SourceFileRegistration(
+            upload=upload,
+            detected_mime_type="application/pdf",
+            sha256=hashlib.sha256(file_content).hexdigest(),
+            byte_size=len(file_content),
+            storage_ref=f"synthetic-private/{tenant_id}/{file_id}",
+        )
+    )
+    files.record_scan_result(upload, ScanResult(ScanVerdict.CLEAN, "synthetic-av", "1.0"))
+    chunk_text = "confidential other course text"
+    chunk_id = uuid.uuid4()
+    files.persist_extracted(
+        upload,
+        expected_sha256=hashlib.sha256(file_content).hexdigest(),
+        extractor_version="synthetic-sandbox-v1",
+        page_count=1,
+        chunks=[
+            PersistedChunkInput(
+                chunk_id=chunk_id,
+                chunk_index=0,
+                page_number=1,
+                section_path=None,
+                content=chunk_text,
+                content_hash=hashlib.sha256(chunk_text.encode("utf-8")).hexdigest(),
+            )
+        ],
+    )
+
+    invocation_id = uuid.uuid4()
+    usage = PostgresAIUsageLedgerRepository(environment.sessions)
+    record = UsageLedgerStart(
+        tenant_id=tenant_id,
+        task_id=uuid.UUID(task.task_id),
+        course_id="synthetic-course",
+        actor_membership_id=membership_id,
+        invocation_id=invocation_id,
+        provider=ProviderIdentity("synthetic-provider", "synthetic-model", "v1", "test-region"),
+        prompt_version="synthetic-prompt-v1",
+        request_hash=hashlib.sha256(b"cross-course attempt").hexdigest(),
+        permit_ref="synthetic-permit",
+        privacy_policy_ref="synthetic-privacy-approval",
+        budget_reservation_ref="synthetic-budget-reservation",
+        budget_reserved_amount=Decimal("1.000000000000"),
+        budget_currency="USD",
+        pricing_version="synthetic-pricing-v1",
+        source_refs=(chunk_id,),
+    )
+
+    with pytest.raises(AIUsageSourceReferenceError):
+        usage.begin(record)
+
+    with session_scope(environment.sessions) as session:
+        assert (
+            session.scalar(
+                select(AIUsageLedgerModel.id).where(
+                    AIUsageLedgerModel.tenant_id == tenant_id,
+                    AIUsageLedgerModel.task_id == uuid.UUID(task.task_id),
+                    AIUsageLedgerModel.invocation_id == invocation_id,
+                )
+            )
+            is None
+        )
+        assert (
+            session.scalar(
+                select(SourceChunkModel.id).where(
+                    SourceChunkModel.tenant_id == tenant_id,
+                    SourceChunkModel.id == chunk_id,
+                )
+            )
+            == chunk_id
+        )
+
+    # Bypass the repository-level precheck and prove the composite PostgreSQL FK still
+    # rejects a source chunk whose course differs from the usage/task course.
+    fk_invocation_id = uuid.uuid4()
+    assert (
+        usage.begin(replace(record, invocation_id=fk_invocation_id, source_refs=()))
+        is UsageLedgerBeginResult.CREATED
+    )
+    with pytest.raises(IntegrityError):
+        with session_scope(environment.sessions) as session:
+            session.add(
+                AIUsageSourceRefModel(
+                    tenant_id=tenant_id,
+                    task_id=uuid.UUID(task.task_id),
+                    invocation_id=fk_invocation_id,
+                    course_id="synthetic-course",
+                    source_chunk_id=chunk_id,
+                )
+            )

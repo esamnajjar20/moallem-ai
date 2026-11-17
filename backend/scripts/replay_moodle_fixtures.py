@@ -9,8 +9,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from moallem.moodle.client import MoodleClient, Token, TransportResponse
-from moallem.moodle.read import (
+# Support both an installed package and direct execution from a source checkout.
+# When invoked as ``python scripts/replay_moodle_fixtures.py``, Python otherwise
+# puts only ``backend/scripts`` on sys.path and cannot resolve ``src/moallem``.
+_SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
+if _SOURCE_ROOT.is_dir() and str(_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SOURCE_ROOT))
+
+from moallem.moodle.client import MoodleClient, Token, TransportResponse  # noqa: E402
+from moallem.moodle.read import (  # noqa: E402
     FN_COURSE_CONTENTS,
     FN_SITE_INFO,
     FN_USER_COURSES,
@@ -18,7 +25,7 @@ from moallem.moodle.read import (
     get_course_contents,
     list_teacher_courses,
 )
-from moallem.moodle.url_policy import ResolvedTarget, normalize_site_url
+from moallem.moodle.url_policy import ResolvedTarget, normalize_site_url  # noqa: E402
 
 _REQUIRED = {FN_SITE_INFO, FN_USER_COURSES, FN_COURSE_CONTENTS}
 _SYNTHETIC_TOKEN = "fixture-replay-only"  # noqa: S105 - fixture transport never sends it

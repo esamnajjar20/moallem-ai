@@ -2,7 +2,7 @@
 
 Revision ID: 6a1e9dce4f21
 Revises: 37cc62a430a9
-Create Date: 2026-11-20 00:00:00.000000
+Create Date: 2026-11-17 12:00:00.000000
 """
 
 from collections.abc import Sequence
@@ -17,18 +17,24 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    connection = op.get_bind()
-    orphan_count = connection.execute(
-        text(
-            "SELECT count(*) FROM idempotency_records AS i "
-            "LEFT JOIN tasks AS t ON t.tenant_id = i.tenant_id AND t.id = i.operation_ref "
-            "WHERE t.id IS NULL"
-        )
-    ).scalar_one()
-    if orphan_count:
-        raise RuntimeError(
-            f"cannot add idempotency task foreign key: {orphan_count} orphan record(s)"
-        )
+    # Keep the data-integrity guard executable in both online and --sql/offline modes.
+    # The DO block performs the count in PostgreSQL at migration execution time.
+    op.execute(
+        """
+        DO $moallem$ DECLARE orphan_count bigint;
+        BEGIN
+            SELECT count(*) INTO orphan_count
+            FROM idempotency_records AS i
+            LEFT JOIN tasks AS t
+              ON t.tenant_id = i.tenant_id AND t.id = i.operation_ref
+            WHERE t.id IS NULL;
+            IF orphan_count > 0 THEN
+                RAISE EXCEPTION 'cannot add idempotency task foreign key: % orphan record(s)',
+                    orphan_count USING ERRCODE = '23503';
+            END IF;
+        END $moallem$;
+        """
+    )
 
     op.create_foreign_key(
         "fk_idempotency_operation_task",

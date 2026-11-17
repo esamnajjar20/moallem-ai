@@ -27,6 +27,10 @@ class InboxMessageConflict(ValueError):
     """A message identifier was reused with a different payload."""
 
 
+class InboxLegacyReceiptConflict(InboxMessageConflict):
+    """A message id is reserved by a pre-tenant receipt that cannot be safely attributed."""
+
+
 class InboxLeaseLost(RuntimeError):
     """The Inbox receipt lease is stale or no longer owned by this consumer."""
 
@@ -145,8 +149,7 @@ class PostgresInboxConsumer:
         owner: str,
         now: datetime | None = None,
     ) -> InboxClaim | InboxResult:
-        timestamp = now or datetime.now(UTC)
-        _validate_message(message, owner, timestamp)
+        _validate_message(message, owner, now or datetime.now(UTC))
         tenant_id = uuid.UUID(message.tenant_id)
         payload_hash = canonical_request_hash(message.payload)
 
@@ -161,6 +164,24 @@ class PostgresInboxConsumer:
                 .with_for_update()
             )
             if row is None:
+                # The pre-tenant schema used a global (consumer, message_id) key. An old
+                # receipt has no reliable tenant attribution, so never infer one or create a
+                # fresh tenant-scoped receipt for the same source identity. Keep the legacy
+                # row untouched and let the source adapter route this conflict to quarantine.
+                legacy_row = session.scalar(
+                    select(InboxReceiptModel)
+                    .where(
+                        InboxReceiptModel.tenant_id.is_(None),
+                        InboxReceiptModel.consumer == message.consumer,
+                        InboxReceiptModel.message_id == message.message_id,
+                    )
+                    .with_for_update()
+                )
+                if legacy_row is not None:
+                    raise InboxLegacyReceiptConflict(
+                        "message identifier belongs to an unscoped legacy receipt; "
+                        "manual tenant reconciliation is required"
+                    )
                 try:
                     with session.begin_nested():
                         row = InboxReceiptModel(
@@ -186,6 +207,9 @@ class PostgresInboxConsumer:
                     if row is None:
                         raise
 
+            # The initial SELECT may have waited on another transaction's row lock. Only
+            # decide whether a PROCESSING lease is live after the lock is ours.
+            timestamp = now or datetime.now(UTC)
             if row.payload_hash is not None and not hmac.compare_digest(
                 row.payload_hash, payload_hash
             ):
@@ -254,35 +278,46 @@ class PostgresInboxConsumer:
         *,
         now: datetime | None = None,
     ) -> InboxResult:
-        timestamp = now or datetime.now(UTC)
         if canonical_request_hash(message.payload) != claim.payload_hash:
             raise InboxMessageConflict("claim does not belong to this message payload")
         try:
             with session_scope(self._sessions) as session:
-                row = _locked_claim(session, claim, timestamp)
+                row = _locked_claim(session, claim, now)
                 result_ref = handler.process(session, message)
                 if result_ref is not None and (
                     not isinstance(result_ref, str) or len(result_ref) > 512
                 ):
                     raise PermanentInboxError("RESULT_REFERENCE_INVALID")
+                # The handler can itself take time. It runs inside this transaction, so a
+                # lease that expires before completion must roll back both its DB effects and
+                # the attempted PROCESSED transition.
+                completed_at = now or datetime.now(UTC)
+                _assert_claim_current(row, claim, completed_at)
+                lease_expires_at = row.lease_expires_at
                 row.state = "PROCESSED"
                 row.processed_result_ref = result_ref
-                row.completed_at = timestamp
+                row.completed_at = completed_at
                 row.retryable = False
                 row.last_error_code = None
                 row.lease_owner = None
                 row.lease_expires_at = None
                 session.flush()
+                if (
+                    now is None
+                    and lease_expires_at is not None
+                    and lease_expires_at <= datetime.now(UTC)
+                ):
+                    raise InboxLeaseLost("Inbox receipt lease expired before commit")
             return InboxResult("PROCESSED", acknowledge=True, result_ref=result_ref)
         except InboxLeaseLost:
             raise
         except PermanentInboxError as exc:
             return self._record_failure(
-                claim, exc.error_code, retryable=False, now=max(timestamp, datetime.now(UTC))
+                claim, exc.error_code, retryable=False, now=now
             )
         except RetryableInboxError as exc:
             return self._record_failure(
-                claim, exc.error_code, retryable=True, now=max(timestamp, datetime.now(UTC))
+                claim, exc.error_code, retryable=True, now=now
             )
         except Exception as exc:
             log.error(
@@ -296,7 +331,7 @@ class PostgresInboxConsumer:
                 claim,
                 "INBOX_HANDLER_UNEXPECTED",
                 retryable=True,
-                now=max(timestamp, datetime.now(UTC)),
+                now=now,
             )
 
     def _record_failure(
@@ -305,7 +340,7 @@ class PostgresInboxConsumer:
         error_code: str,
         *,
         retryable: bool,
-        now: datetime,
+        now: datetime | None,
     ) -> InboxResult:
         with session_scope(self._sessions) as session:
             row = session.scalar(
@@ -318,21 +353,23 @@ class PostgresInboxConsumer:
                     InboxReceiptModel.state == "PROCESSING",
                     InboxReceiptModel.lease_owner == claim.owner,
                     InboxReceiptModel.lease_generation == claim.generation,
-                    InboxReceiptModel.lease_expires_at > now,
                 )
                 .with_for_update()
             )
             if row is None:
                 raise InboxLeaseLost("Inbox receipt lease is no longer current")
+            # Lock waits must not extend an old worker's authority to record failure.
+            timestamp = now or datetime.now(UTC)
+            _assert_claim_current(row, claim, timestamp)
             exhausted = row.attempts >= self._retry_policy.max_attempts
             retrying = retryable and not exhausted
             row.state = "FAILED"
             row.retryable = retrying
             row.last_error_code = error_code if not exhausted else "ATTEMPTS_EXHAUSTED"
-            row.next_attempt_at = now + timedelta(
+            row.next_attempt_at = timestamp + timedelta(
                 seconds=self._retry_policy.delay_seconds(row.attempts)
             )
-            row.completed_at = None if retrying else now
+            row.completed_at = None if retrying else timestamp
             row.lease_owner = None
             row.lease_expires_at = None
             session.flush()
@@ -356,7 +393,9 @@ def _validate_message(message: InboxMessage, owner: str, now: datetime) -> None:
         raise ValueError("owner must be a stable identifier")
 
 
-def _locked_claim(session: Session, claim: InboxClaim, now: datetime) -> InboxReceiptModel:
+def _locked_claim(
+    session: Session, claim: InboxClaim, now: datetime | None
+) -> InboxReceiptModel:
     row = session.scalar(
         select(InboxReceiptModel)
         .where(
@@ -368,10 +407,25 @@ def _locked_claim(session: Session, claim: InboxClaim, now: datetime) -> InboxRe
             InboxReceiptModel.state == "PROCESSING",
             InboxReceiptModel.lease_owner == claim.owner,
             InboxReceiptModel.lease_generation == claim.generation,
-            InboxReceiptModel.lease_expires_at > now,
         )
         .with_for_update()
     )
     if row is None:
         raise InboxLeaseLost("Inbox receipt lease is no longer current")
+    _assert_claim_current(row, claim, now or datetime.now(UTC))
     return row
+
+
+def _assert_claim_current(
+    row: InboxReceiptModel, claim: InboxClaim, now: datetime
+) -> None:
+    if (
+        now.tzinfo is None
+        or row.state != "PROCESSING"
+        or row.lease_owner != claim.owner
+        or row.lease_generation != claim.generation
+        or row.payload_hash != claim.payload_hash
+        or row.lease_expires_at is None
+        or row.lease_expires_at <= now
+    ):
+        raise InboxLeaseLost("Inbox receipt lease is no longer current")

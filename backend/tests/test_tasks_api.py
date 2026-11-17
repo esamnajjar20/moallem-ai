@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
@@ -10,6 +11,7 @@ from moallem.domain.membership import (
     Membership,
     MembershipStatus,
 )
+from moallem.persistence.task_repository import PersistedTaskEvent, PersistedTaskEventPage
 
 _USER_ID = str(uuid.uuid4())
 _TENANT_ID = str(uuid.uuid4())
@@ -79,3 +81,46 @@ def test_task_request_rejects_unknown_fields_without_echoing_values() -> None:
     assert response.status_code == 400
     assert "must-not-be-echoed" not in response.text
     assert response.json()["code"] == "VALIDATION_FAILED"
+
+
+def test_task_event_endpoint_serializes_recovery_events() -> None:
+    task_id = uuid.uuid4()
+    event_id = uuid.uuid4()
+
+    class RecoveryEventRepository:
+        def list_event_page(self, context, task_id_value, *, after_sequence, limit):
+            assert task_id_value == str(task_id)
+            return PersistedTaskEventPage(
+                items=[
+                    PersistedTaskEvent(
+                        event_id=str(event_id),
+                        sequence=1,
+                        event_type="TASK_RECOVERED",
+                        from_status=None,
+                        to_status=None,
+                        message_code=None,
+                        occurred_at=datetime.now(UTC),
+                    )
+                ],
+                has_more=False,
+                last_sequence=1,
+                oldest_available_sequence=1,
+            )
+
+    client = _client(allow_tasks=True)
+    client.app.state.task_repository = RecoveryEventRepository()
+    client.app.state.settings = Settings(
+        env=Environment.TEST,
+        _env_file=None,
+        event_cursor_hmac_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    )
+    response = client.get(
+        f"/tasks/{task_id}/events",
+        headers={
+            "X-Dev-User-ID": _USER_ID,
+            "X-Active-Membership-ID": _MEMBERSHIP_ID,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["event_type"] == "TASK_RECOVERED"

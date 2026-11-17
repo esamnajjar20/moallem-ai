@@ -62,18 +62,32 @@ def upgrade() -> None:
         "inbox_receipts", sa.Column("last_error_code", sa.String(length=64), nullable=True)
     )
 
+    # A pre-tenant PROCESSING receipt has no lease owner/generation and cannot prove
+    # whether its handler committed an effect. Preserve the receipt, but quarantine it as
+    # non-retryable FAILED before enforcing the new lease invariant. Never replay it blindly.
     bind = op.get_bind()
-    bind.execute(sa.text("UPDATE inbox_receipts SET state = 'PROCESSED' WHERE state = 'COMPLETED'"))
-    invalid_state_count = bind.execute(
+    bind.execute(
         sa.text(
-            "SELECT count(*) FROM inbox_receipts "
-            "WHERE state NOT IN ('RECEIVED', 'PROCESSING', 'PROCESSED', 'FAILED')"
+            "UPDATE inbox_receipts "
+            "SET state = 'FAILED', retryable = false, "
+            "last_error_code = 'LEGACY_PROCESSING_OUTCOME_UNKNOWN', "
+            "completed_at = COALESCE(completed_at, now()) "
+            "WHERE state = 'PROCESSING'"
         )
-    ).scalar_one()
-    if invalid_state_count:
-        raise RuntimeError(
-            f"cannot constrain inbox state: {invalid_state_count} unsupported receipt(s)"
+    )
+
+    bind.execute(sa.text("UPDATE inbox_receipts SET state = 'PROCESSED' WHERE state = 'COMPLETED'"))
+    # Use a database-side assertion so Alembic --sql can emit the complete migration.
+    bind.execute(
+        sa.text(
+            "DO $moallem$ DECLARE invalid_state_count bigint; BEGIN "
+            "SELECT count(*) INTO invalid_state_count FROM inbox_receipts "
+            "WHERE state NOT IN ('RECEIVED', 'PROCESSING', 'PROCESSED', 'FAILED'); "
+            "IF invalid_state_count > 0 THEN "
+            "RAISE EXCEPTION 'cannot constrain inbox state: % unsupported receipt(s)', "
+            "invalid_state_count USING ERRCODE = '23514'; END IF; END $moallem$;"
         )
+    )
 
     op.drop_constraint("uq_inbox_consumer_message", "inbox_receipts", type_="unique")
     op.create_unique_constraint(
@@ -109,27 +123,28 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    recovery_task_count = bind.execute(
-        sa.text("SELECT count(*) FROM tasks WHERE retry_of_task_id IS NOT NULL")
-    ).scalar_one()
-    if recovery_task_count:
-        raise RuntimeError(
-            f"cannot downgrade task recovery lineage: {recovery_task_count} recovery task(s) "
-            "would lose their parent reference"
-        )
-    new_receipt_count = bind.execute(
+    bind.execute(
         sa.text(
-            "SELECT count(*) FROM inbox_receipts WHERE tenant_id IS NOT NULL "
-            "OR state IN ('PROCESSING', 'FAILED') OR attempts > 0 "
-            "OR payload_hash IS NOT NULL OR lease_generation > 0 "
-            "OR last_error_code IS NOT NULL"
+            "DO $moallem$ DECLARE recovery_task_count bigint; BEGIN "
+            "SELECT count(*) INTO recovery_task_count FROM tasks "
+            "WHERE retry_of_task_id IS NOT NULL; "
+            "IF recovery_task_count > 0 THEN "
+            "RAISE EXCEPTION 'cannot downgrade task recovery lineage: % recovery task(s) "
+            "would lose their parent reference', recovery_task_count "
+            "USING ERRCODE = '23503'; END IF; END $moallem$;"
         )
-    ).scalar_one()
-    if new_receipt_count:
-        raise RuntimeError(
-            "cannot downgrade inbox processing data: "
-            f"{new_receipt_count} receipt(s) would lose state"
+    )
+    bind.execute(
+        sa.text(
+            "DO $moallem$ DECLARE new_receipt_count bigint; BEGIN "
+            "SELECT count(*) INTO new_receipt_count FROM inbox_receipts "
+            "WHERE tenant_id IS NOT NULL OR state IN ('PROCESSING', 'FAILED') OR attempts > 0 "
+            "OR payload_hash IS NOT NULL OR lease_generation > 0 OR last_error_code IS NOT NULL; "
+            "IF new_receipt_count > 0 THEN "
+            "RAISE EXCEPTION 'cannot downgrade inbox processing data: % receipt(s) would lose state', "
+            "new_receipt_count USING ERRCODE = '23514'; END IF; END $moallem$;"
         )
+    )
 
     op.drop_constraint("ck_inbox_receipt_lease", "inbox_receipts", type_="check")
     op.drop_constraint("ck_inbox_lease_generation", "inbox_receipts", type_="check")

@@ -487,8 +487,7 @@ class PostgresTaskRepository:
         message_code: str | None = None,
         occurred_at: datetime | None = None,
     ) -> PersistedTask:
-        timestamp = occurred_at or datetime.now(UTC)
-        if timestamp.tzinfo is None:
+        if occurred_at is not None and occurred_at.tzinfo is None:
             raise ValueError("occurred_at must be timezone-aware")
         tenant_uuid, task_uuid = _uuid(claim.tenant_id), _uuid(claim.task_id)
         with session_scope(self._sessions) as session:
@@ -501,7 +500,6 @@ class PostgresTaskRepository:
                     OutboxEventModel.status == "LEASED",
                     OutboxEventModel.lease_owner == claim.owner,
                     OutboxEventModel.lease_generation == claim.generation,
-                    OutboxEventModel.lease_expires_at > timestamp,
                 )
                 .with_for_update()
             )
@@ -517,6 +515,18 @@ class PostgresTaskRepository:
             )
             if row is None:
                 raise ResourceNotFound("resource not found")
+            # Both the Outbox and Task rows may block on another transaction. Evaluate
+            # expiration only after both locks are held so an old worker cannot mutate a
+            # task using a timestamp captured before a lock wait.
+            timestamp = occurred_at or datetime.now(UTC)
+            if (
+                outbox.lease_expires_at is None
+                or outbox.lease_expires_at <= timestamp
+                or outbox.lease_owner != claim.owner
+                or outbox.lease_generation != claim.generation
+                or outbox.status != "LEASED"
+            ):
+                raise LeaseLost("worker claim expired while waiting for database locks")
             current_status = TaskStatus(row.status)
             updated = transition_task(
                 Task(
@@ -547,6 +557,9 @@ class PostgresTaskRepository:
                 )
             )
             session.flush()
+            # Catch a lease that expires while the task/event changes are being flushed.
+            if outbox.lease_expires_at <= datetime.now(UTC) and occurred_at is None:
+                raise LeaseLost("worker claim expired before task transition commit")
             return _domain(row)
 
     def transition(
