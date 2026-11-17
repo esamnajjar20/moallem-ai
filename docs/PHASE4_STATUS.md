@@ -34,6 +34,7 @@ remain outstanding.
 | Full `make check` | PASS; Ruff, formatting, mypy (45 files), pytest (**322 passed, 1 optional DB test skipped**), `uv build`, and `pip-audit` |
 | Test suite with PostgreSQL enabled | PASS; **323 passed**, 1 Starlette/httpx deprecation warning |
 | Dependency audit | PASS; no known vulnerabilities in audited dependencies; unpublished local package is not on PyPI |
+| GitHub Actions PostgreSQL service | Configured in `.github/workflows/ci.yml`; applies Alembic migrations before tests and sets `MOALLEM_TEST_DATABASE_URL`. Local PostgreSQL-backed run: **323 passed**; remote GitHub Actions run not yet observed. |
 | Moodle staging interoperability | **BLOCKED**; no Moodle staging URL/account or real sanitized fixtures |
 
 Integration test instructions (after provisioning a disposable PostgreSQL test database and
