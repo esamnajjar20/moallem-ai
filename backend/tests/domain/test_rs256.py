@@ -78,6 +78,11 @@ def test_all_bad_tokens_are_the_same_401() -> None:
         sign_rs256(_p(aud=[1, 2])),
         sign_rs256(_p(sub=5)),
         sign_rs256(_p(exp=NOW - 100)),
+        sign_rs256(_p(iat=NOW + 60, exp=NOW + 600)),
+        sign_rs256(_p(iat=NOW - 10, exp=NOW - 20)),
+        sign_rs256(_p(exp=float("nan"))),
+        sign_rs256(_p(exp=float("inf"))),
+        sign_rs256(_p(iat=float("nan"))),
         sign_rs256(_p(iss="https://evil.example/")),
         sign_rs256(_p(aud="other-api")),
         sign_rs256(_p(iat=NOW - 7200, exp=NOW + 3600)),  # 3h lifetime > 15 min cap

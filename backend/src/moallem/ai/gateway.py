@@ -17,6 +17,7 @@ from moallem.ai.errors import (
     AIProviderOutcomeUnknown,
     AIReservationSettlementFailed,
     AIUsageLedgerConflict,
+    AIUsageAccountingUnknown,
 )
 from moallem.ai.provider import AIExecutionAuthorizer, AIProvider
 from moallem.ai.usage import (
@@ -134,6 +135,11 @@ class AIGateway:
                 "provider outcome is unknown; do not retry automatically"
             ) from None
 
+        if not isinstance(response, AIProviderResponse):
+            await asyncio.to_thread(
+                self._mark_unknown, request, "AI_PROVIDER_RESPONSE_INVALID"
+            )
+            raise AIProviderOutcomeUnknown("provider returned an invalid response object")
         if response.identity != provider_identity:
             await asyncio.to_thread(
                 self._mark_unknown, request, "AI_PROVIDER_IDENTITY_MISMATCH"
@@ -145,7 +151,17 @@ class AIGateway:
             )
             raise AIProviderOutcomeUnknown("provider exceeded the declared output token limit")
 
-        actual_cost = permit.pricing.calculate(response.usage)
+        try:
+            actual_cost = permit.pricing.calculate(response.usage)
+        except (ValueError, ArithmeticError):
+            # The provider has already answered. Preserve the invocation as UNKNOWN and
+            # keep its reservation for operator reconciliation rather than losing accounting.
+            await asyncio.to_thread(
+                self._mark_unknown, request, "AI_USAGE_COST_CALCULATION_FAILED"
+            )
+            raise AIUsageAccountingUnknown(
+                "provider usage was returned but its cost could not be safely recorded"
+            ) from None
         completed = UsageLedgerCompletion(
             tenant_id=request.tenant_id,
             task_id=request.task_id,

@@ -25,6 +25,9 @@ _MAX_LEDGER_AMOUNT = Decimal("999999999999.999999999999")
 _LEDGER_QUANTUM = Decimal("0.000000000001")
 _MAX_BIGINT = 2**63 - 1
 _MAX_SOURCE_REFS = 256
+_MAX_REQUEST_MESSAGES = 64
+_MAX_REQUEST_TEXT_BYTES = 1024 * 1024
+_MAX_PROVIDER_OUTPUT_BYTES = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,8 +38,14 @@ class AIMessage:
     def __post_init__(self) -> None:
         if not isinstance(self.role, AIMessageRole):
             raise ValueError("AI message role must be an explicit AIMessageRole")
-        if not self.content.strip():
-            raise ValueError("AI message content must not be empty")
+        if not isinstance(self.content, str) or not self.content.strip():
+            raise ValueError("AI message content must be non-empty text")
+        try:
+            content_bytes = self.content.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ValueError("AI message content must be valid UTF-8 text") from exc
+        if b"\x00" in content_bytes:
+            raise ValueError("AI message content must not contain NUL bytes")
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,8 +66,15 @@ class AIRequest:
             raise ValueError("prompt_version must be 1..128 characters")
         if not self.course_id or len(self.course_id) > 128:
             raise ValueError("course_id must be 1..128 characters")
-        if not self.messages:
-            raise ValueError("at least one AI message is required")
+        if not isinstance(self.messages, tuple) or not self.messages:
+            raise ValueError("messages must be a non-empty immutable tuple")
+        if len(self.messages) > _MAX_REQUEST_MESSAGES:
+            raise ValueError(f"AI requests must not exceed {_MAX_REQUEST_MESSAGES} messages")
+        if any(not isinstance(message, AIMessage) for message in self.messages):
+            raise ValueError("AI requests may contain only validated AIMessage values")
+        request_text_bytes = sum(len(message.content.encode("utf-8")) for message in self.messages)
+        if request_text_bytes > _MAX_REQUEST_TEXT_BYTES:
+            raise ValueError("AI request text exceeds the 1MiB application limit")
         if not 1 <= self.max_output_tokens <= _MAX_BIGINT:
             raise ValueError("max_output_tokens must be within PostgreSQL BIGINT range")
         if not self.data_classes or any(
@@ -111,8 +127,15 @@ class ProviderIdentity:
             ("model_version", self.model_version),
             ("region", self.region),
         ):
-            if not value or not value.strip() or len(value) > limits[name]:
-                raise ValueError(f"{name} must be 1..{limits[name]} characters")
+            if (
+                not isinstance(value, str)
+                or not value
+                or value != value.strip()
+                or len(value) > limits[name]
+            ):
+                raise ValueError(f"{name} must be 1..{limits[name]} trimmed characters")
+        if self.model_version.casefold() in {"latest", "stable", "default", "current"}:
+            raise ValueError("model_version must identify a pinned revision, not an alias")
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,10 +144,15 @@ class TokenUsage:
     output_tokens: int
 
     def __post_init__(self) -> None:
-        if not (0 <= self.input_tokens <= _MAX_BIGINT) or not (
-            0 <= self.output_tokens <= _MAX_BIGINT
+        if (
+            isinstance(self.input_tokens, bool)
+            or not isinstance(self.input_tokens, int)
+            or isinstance(self.output_tokens, bool)
+            or not isinstance(self.output_tokens, int)
+            or not (0 <= self.input_tokens <= _MAX_BIGINT)
+            or not (0 <= self.output_tokens <= _MAX_BIGINT)
         ):
-            raise ValueError("token counts must be within PostgreSQL BIGINT range")
+            raise ValueError("token counts must be integers within PostgreSQL BIGINT range")
 
     @property
     def total_tokens(self) -> int:
@@ -139,8 +167,24 @@ class AIProviderResponse:
     provider_request_id: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.output_text.strip():
-            raise ValueError("provider output must not be empty")
+        if not isinstance(self.identity, ProviderIdentity):
+            raise ValueError("provider response identity must be a validated ProviderIdentity")
+        if not isinstance(self.usage, TokenUsage):
+            raise ValueError("provider response usage must be a validated TokenUsage")
+        if self.provider_request_id is not None and (
+            not isinstance(self.provider_request_id, str)
+            or len(self.provider_request_id) > 256
+            or any(ord(char) < 0x20 or ord(char) == 0x7F for char in self.provider_request_id)
+        ):
+            raise ValueError("provider request ID must be at most 256 printable characters")
+        if not isinstance(self.output_text, str) or not self.output_text.strip():
+            raise ValueError("provider output must be non-empty text")
+        try:
+            output_size = len(self.output_text.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError("provider output must be valid UTF-8 text") from exc
+        if output_size > _MAX_PROVIDER_OUTPUT_BYTES:
+            raise ValueError("provider output exceeds the 2MiB application limit")
 
 
 @dataclass(frozen=True, slots=True)

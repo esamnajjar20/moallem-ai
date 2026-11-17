@@ -196,3 +196,182 @@ def test_task_event_endpoint_serializes_recovery_events() -> None:
 
     assert response.status_code == 200
     assert response.json()["items"][0]["event_type"] == "TASK_RECOVERED"
+
+
+def test_snapshot_and_approval_routes_remain_fail_closed_without_permission_policy() -> None:
+    task_id = uuid.uuid4()
+    app = create_app(
+        Settings(env=Environment.TEST, _env_file=None),
+        checks=[],
+        membership_repo=InMemoryMembershipRepository(
+            {
+                _MEMBERSHIP_ID: Membership(
+                    membership_id=_MEMBERSHIP_ID,
+                    user_id=_USER_ID,
+                    tenant_id=_TENANT_ID,
+                    roles=("TEACHER",),
+                    status=MembershipStatus.ACTIVE,
+                )
+            }
+        ),
+    )
+    app.state.publication_repository = object()
+    client = TestClient(app)
+    headers = {
+        "X-Dev-User-ID": _USER_ID,
+        "X-Active-Membership-ID": _MEMBERSHIP_ID,
+        "Idempotency-Key": "p" * 22,
+    }
+    snapshot = client.get(f"/api/v1/tasks/{task_id}/snapshot", headers=headers)
+    assert snapshot.status_code == 403
+    approval = client.post(
+        f"/api/v1/tasks/{task_id}/approvals",
+        headers=headers,
+        json={
+            "decision": "APPROVED",
+            "snapshot_id": str(uuid.uuid4()),
+            "snapshot_hash": "a" * 64,
+        },
+    )
+    assert approval.status_code == 403
+
+
+def test_approval_route_uses_server_ttl_hmac_and_never_accepts_destination() -> None:
+    from moallem.persistence.publishing_repository import ApprovalResult
+    from moallem.domain.publishing import ApprovalDecision
+
+    task_id = uuid.uuid4()
+    snapshot_id = uuid.uuid4()
+    observed: dict[str, object] = {}
+
+    class FakePublicationRepository:
+        def record_approval(self, context, **kwargs):
+            observed["membership_id"] = context.membership_id
+            observed.update(kwargs)
+            now = datetime.now(UTC)
+            return ApprovalResult(
+                approval_id=str(uuid.uuid4()),
+                task_id=str(task_id),
+                snapshot_id=str(snapshot_id),
+                snapshot_hash="b" * 64,
+                decision=ApprovalDecision.APPROVED,
+                decided_at=now,
+                expires_at=now.replace(year=now.year + 1),
+            )
+
+    membership_repo = InMemoryMembershipRepository(
+        {
+            _MEMBERSHIP_ID: Membership(
+                membership_id=_MEMBERSHIP_ID,
+                user_id=_USER_ID,
+                tenant_id=_TENANT_ID,
+                roles=("TEACHER",),
+                status=MembershipStatus.ACTIVE,
+            )
+        }
+    )
+    app = create_app(
+        Settings(
+            env=Environment.TEST,
+            idempotency_hmac_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            idempotency_retention_seconds=86400,
+            approval_ttl_seconds=3600,
+            _env_file=None,
+        ),
+        checks=[],
+        membership_repo=membership_repo,
+        permission_policy=StaticPolicy({"TEACHER": frozenset({"quiz.approve"})}),
+    )
+    app.state.publication_repository = FakePublicationRepository()
+    response = TestClient(app).post(
+        f"/api/v1/tasks/{task_id}/approvals",
+        headers={
+            "X-Dev-User-ID": _USER_ID,
+            "X-Active-Membership-ID": _MEMBERSHIP_ID,
+            "Idempotency-Key": "p" * 22,
+        },
+        json={
+            "decision": "APPROVED",
+            "snapshot_id": str(snapshot_id),
+            "snapshot_hash": "b" * 64,
+        },
+    )
+    assert response.status_code == 201
+    assert observed["approval_ttl_seconds"] == 3600
+    assert observed["snapshot_hash_value"] == "b" * 64
+    assert "destination" not in observed
+    assert observed["decision"] is ApprovalDecision.APPROVED
+
+
+def test_verified_task_result_is_returned_only_after_repository_verification() -> None:
+    task_id = uuid.uuid4()
+
+    class FakePublicationRepository:
+        def get_verified_result(self, context, requested_task_id):
+            assert requested_task_id == str(task_id)
+            assert context.tenant_id == _TENANT_ID
+            return {
+                "external_object_type": "QUIZ",
+                "external_object_id": "quiz-123",
+                "verification_status": "VERIFIED",
+                "verified_at": datetime.now(UTC).isoformat(),
+                "snapshot_hash": "a" * 64,
+                "course_id": "course-1",
+                "expected_content_match": True,
+            }
+
+    app = create_app(
+        Settings(env=Environment.TEST, _env_file=None),
+        checks=[],
+        membership_repo=InMemoryMembershipRepository(
+            {
+                _MEMBERSHIP_ID: Membership(
+                    membership_id=_MEMBERSHIP_ID,
+                    user_id=_USER_ID,
+                    tenant_id=_TENANT_ID,
+                    roles=("TEACHER",),
+                    status=MembershipStatus.ACTIVE,
+                )
+            }
+        ),
+        permission_policy=StaticPolicy({"TEACHER": frozenset({"task.read"})}),
+    )
+    app.state.publication_repository = FakePublicationRepository()
+    response = TestClient(app).get(
+        f"/api/v1/tasks/{task_id}/result",
+        headers={
+            "X-Dev-User-ID": _USER_ID,
+            "X-Active-Membership-ID": _MEMBERSHIP_ID,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["verification_status"] == "VERIFIED"
+    assert response.json()["external_object_id"] == "quiz-123"
+
+
+def test_verified_task_result_route_is_fail_closed_without_read_permission() -> None:
+    task_id = uuid.uuid4()
+    app = create_app(
+        Settings(env=Environment.TEST, _env_file=None),
+        checks=[],
+        membership_repo=InMemoryMembershipRepository(
+            {
+                _MEMBERSHIP_ID: Membership(
+                    membership_id=_MEMBERSHIP_ID,
+                    user_id=_USER_ID,
+                    tenant_id=_TENANT_ID,
+                    roles=("TEACHER",),
+                    status=MembershipStatus.ACTIVE,
+                )
+            }
+        ),
+    )
+    app.state.publication_repository = object()
+    response = TestClient(app).get(
+        f"/api/v1/tasks/{task_id}/result",
+        headers={
+            "X-Dev-User-ID": _USER_ID,
+            "X-Active-Membership-ID": _MEMBERSHIP_ID,
+        },
+    )
+    assert response.status_code == 403

@@ -1,17 +1,10 @@
 # P2 — Identity and tenancy status
 
-**Status: NOT CLOSED.** The owner approved Auth0, PostgreSQL, AES-256-GCM, and Engineering
-Documentation v2.4 on 2026-11-16, and approved PostgreSQL `SKIP LOCKED` queueing for the MVP.
-Local PostgreSQL persistence now covers membership, Auth0 subject mapping, tenant-scoped Moodle
-connections, task/idempotency/event/outbox persistence, and an AES-GCM development vault.
-Remaining identity/session, authorization, tenant-isolation, key-custody, and deployment decisions
-still block closure. The default authenticator remains fail-closed and authorization defaults to
-`DenyAllPolicy`.
+**Status: NOT CLOSED (Authentication Backend MVP implemented; P2 as a whole remains open).** The owner approved Auth0, PostgreSQL, AES-256-GCM, and Engineering Documentation v2.4 on 2026-11-16, and approved PostgreSQL `SKIP LOCKED` queueing for the MVP. Local PostgreSQL persistence now covers membership, Auth0 subject mapping, tenant-scoped Moodle connections, task/idempotency/event/outbox persistence, and an AES-GCM development vault. The Auth0 Backend MVP is recorded in `docs/adr/ADR-017-authentication-and-session.md` and `docs/AUTHENTICATION_MVP.md`, with current results in `docs/AUTHENTICATION_IMPLEMENTATION_REPORT_AR.md`. Remaining authorization, tenant-isolation, key-custody, live Auth0/device verification, and deployment decisions still block P2 closure. Authorization defaults to `DenyAllPolicy`.
 
 **Assessment date:** 2026-11-17
 **Baseline:** Engineering Documentation v2.4
-**Exit gate:** owner-approved identity/session and authorization decisions, configured secret
-management, persistent tenant isolation, and the required infrastructure evidence.
+**Exit gate:** complete Auth0 staging + physical-device acceptance, approved authorization matrix, configured secret management, persistent tenant isolation, and the required infrastructure evidence.
 
 ## Verification evidence
 
@@ -22,9 +15,12 @@ management, persistent tenant isolation, and the required infrastructure evidenc
 | mypy | PASS | mypy **1.20.2**; current worktree checks **54 source files**. |
 | Backend tests | PASS | Current worktree `make check`, with the local PostgreSQL test database configured: **362 passed, 1 Starlette/httpx deprecation warning**, no skips. Without the optional database URL, the PostgreSQL tests are skipped. |
 | Tenancy HTTP tests | PASS | `tests/test_tenancy_api.py`: **6 passed**, including AT-015, AT-031, and AT-037 over FastAPI HTTP requests. |
-| Identity/config HTTP tests | PASS | `test_api.py`, `test_bearer_api.py`, `test_me_api.py`, `test_jwks.py`, `test_config.py`, and `test_checks.py` all passed in the full suite. |
+| Authentication-focused tests | PASS | Current run: **37 passed** across bearer API, configuration, JWKS, RS256 claims and identity lifecycle tests. See `docs/AUTHENTICATION_IMPLEMENTATION_REPORT_AR.md`. |
+| Backend regression suite after Authentication | PASS WITH ENVIRONMENT LIMITS | **421 passed, 45 PostgreSQL tests skipped, 1 test deselected** because the sandbox lacks `psycopg`; PostgreSQL integration and production migration were not exercised in this run. |
+| Compile / Alembic | PASS WITH LIMIT | `compileall` and Alembic offline SQL/head checks; migration still requires execution against real PostgreSQL. |
+| Ruff / mypy after Authentication | NOT RUN | Not installed in the current authoring environment; prior baseline results are historical only. |
 | Package and dependency audit | PASS WITH QUALIFICATION | `uv build` built sdist and wheel. `pip-audit` found no known vulnerabilities after updating locked `cryptography` to 50.0.2; it skipped the unpublished local `moallem 0.0.1` package. |
-| GitHub Actions | PASS | Run #44072361770 on committed SHA `a02b508a4a52c0a79486eefeea38446871b75194`; all four jobs passed, including PostgreSQL migration and integration tests. The new task-repository worktree changes are not in that SHA. |
+| GitHub Actions | PASS | Run #44072361770 on committed SHA `a02b508a4a52c0a79486eefeea38446871b75194`; all four jobs passed, including PostgreSQL migration and integration tests. The later Auth MVP changes are not in that SHA. |
 | Production integrations | NOT RUN | CI does not prove production Auth0, hosted PostgreSQL, Redis/broker, KMS, or live Moodle behavior. |
 
 ## Implemented scope
@@ -34,9 +30,7 @@ management, persistent tenant isolation, and the required infrastructure evidenc
   derived from the membership, not a client-supplied tenant header.
 - **Authorization:** `require_tenant` hides cross-tenant resources as 404 (AT-015), then explicit
   permission evaluation applies. `DenyAllPolicy` remains the default while DEC-027 is open.
-- **Authentication:** Auth0 is the owner-approved provider. Bearer verification, issuer/audience/
-  expiry checks, and pre-provisioned subject mapping are implemented; production still fails
-  closed without configured issuer/audience and persistent membership records.
+- **Authentication:** Auth0 is the owner-approved provider. Backend Auth MVP implements RS256/JWKS access-token verification, exact issuer/audience and time/lifetime validation, pre-provisioned subject mapping, `ACTIVE/SUSPENDED/REVOKED` account status, immediate API denial for disabled identities, `WWW-Authenticate` challenges, no-store responses, `/readyz` JWKS readiness, and an operator-only identity provisioning/status command. Login, refresh-token exchange, and logout remain native Auth0 SDK operations; the API never receives refresh tokens. Apply migration `f4a2d9c61b80`. Live Auth0 tenant and Android/iOS PKCE/refresh/logout/MFA tests have not been performed.
 - **JWKS and RS256:** HTTPS JWKS retrieval has size/cache limits and fails closed. RS256 verification
   uses PyJWT/cryptography; this does not replace operational Auth0 configuration or evidence.
 - **Secret boundary:** Moodle credential references are tenant-scoped in PostgreSQL and encrypted
@@ -68,7 +62,7 @@ management, persistent tenant isolation, and the required infrastructure evidenc
 
 | Decision / evidence | Owner or dependency | State |
 |---|---|---|
-| ADR-017 identity provider | Owner | APPROVED: Auth0; issuer/audience, sessions and revocation remain OPEN |
+| ADR-017 identity/authentication | Backend implementation | IMPLEMENTED for Backend MVP; Auth0 tenant and physical-device acceptance VERIFY before pilot |
 | ADR-015 state-management approval; ADR-016 type-checker approval | Product / Engineering owners | PROVISIONAL |
 | DEC-026 site-sharing model; DEC-027 permission matrix; DEC-032 isolation strategy | Product, Security, Architecture | OPEN |
 | DEC-030 MVP queue | Project Owner | APPROVED: PostgreSQL `FOR UPDATE SKIP LOCKED`; production capacity/operations evidence remains outstanding |
@@ -76,7 +70,7 @@ management, persistent tenant isolation, and the required infrastructure evidenc
 | Secret Manager selection and operational key custody | Security / Platform owners | OPEN; production AES key is not configured |
 | ADR-020 hosting, network egress, and private-campus connector | Infrastructure / Security owners | OPEN |
 | P0-02/03/04 Moodle staging URL, current API evidence, and teacher account | Moodle administrator | BLOCKED |
-| DEC-033 question-domain selection and AI provider | Product / Education and Engineering owners | OPEN; no AI code added |
+| DEC-033 question-domain selection and AI provider | Product / Education and Engineering owners | OPEN; P6 now has a gated draft service foundation, but approved question types and execution remain blocked |
 
 Additional engineering proposals remain unapproved: decimal handling and NFC ordering for
 canonical content, task-cancellation transition extensions, and the membership-context error

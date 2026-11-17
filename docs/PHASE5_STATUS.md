@@ -6,7 +6,7 @@
 
 The scope is taken from `Implementation_Control_v2.5_P5.xlsx`, sheet `Execution Backlog`:
 
-- **P5-01 — AI provider gateway and usage ledger.** The HTTP provider adapter is implemented, but P0-09 / ADR-018 provider, model revision, data classes, region, privacy terms and production authorization/budget policy remain unapproved.
+- **P5-01 — AI provider gateway and usage ledger.** The provider-neutral gateway/ledger and HTTP adapter pre-existed. This pass adds optional all-or-none `MOALLEM_AI_*` settings, a strict exact-host allow-list, a non-fallback `StaticAIProviderRegistry`, a provider factory, request/response bounds, and stronger runtime contract validation. The registry/factory are not composed into API/Worker, and no live execution is enabled. P0-09 / ADR-018 provider, model revision, data classes, region, privacy terms and production authorization/budget policy remain unapproved.
 - **P5-02 — secure file intake/extraction and provenance.** The application clients for private quarantine storage, malware scanning and sandboxed extraction are implemented. The corresponding service deployments, storage/KMS/region/lifecycle decisions, scanner engine and parser sandbox are not. DEC-028 and DEC-029 remain open.
 
 These owner decisions cannot be made by code changes. No provider, region, retention schedule, KMS key policy, or external service has been selected on the user's behalf.
@@ -16,7 +16,8 @@ These owner decisions cannot be made by code changes. No provider, region, reten
 ### P5-01 — AI Gateway
 
 - `backend/src/moallem/ai/http_provider.py` adds `OpenAICompatibleHTTPProvider`, an opt-in HTTPS Chat Completions client with bounded responses, pinned model ID matching, no redirects, no automatic retry, and explicit unknown-outcome treatment. It does not log prompt/completion bodies.
-- The adapter is **not registered or enabled by default**. `DenyAllAIExecution` remains the default and rejects AI dispatch until an approved authorizer is injected. The adapter's provider/model-version/region identity values are deployment assertions, not independently verified facts from the remote endpoint.
+- Optional provider transport registration is now implemented by `StaticAIProviderRegistry` and `build_ai_provider_registry(settings)`. The factory returns an empty registry when unconfigured, or registers only the single exact provider/model/version/region from the complete settings group. It performs no fallback selection and is deliberately not wired into API/Worker startup. `DenyAllAIExecution` remains the default and rejects AI dispatch until an approved authorizer is injected. The adapter's provider/model-version/region identity values are deployment assertions, not independently verified facts from the remote endpoint.
+- Provider settings are optional and all-or-none. API keys use `SecretStr`; provider endpoints must use HTTPS and an exact DNS hostname allow-list. Wildcard hosts and IP literals are rejected. The adapter applies request/response byte limits, identity-only encoding, no redirects, no automatic retries, pinned response model ID, and safe `UNKNOWN` treatment for ambiguous outcomes. `AIRequest`, `AIProviderResponse`, `TokenUsage`, and `ProviderIdentity` now enforce stronger boundary validation.
 - `AIGateway` records invocation identity and request hash before external dispatch; it rejects duplicate/conflicting invocation IDs, does not retry ambiguous provider outcomes, records usage/cost metadata, and settles the reservation after successful ledger completion. Cancellation after provider response waits for ledger completion and settlement before propagating cancellation.
 - `PostgresAIUsageLedgerRepository` persists the usage record and source-reference links atomically, validates identity/hash/currency/cost, and checks source tenant/course/file/chunk state and content hash.
 - A production budget authorizer/reservation/reconciliation service is still not implemented. The `AIExecutionAuthorizer` is a contract; `DenyAllAIExecution` is the only safe default. No persisted orphan-reservation recovery worker or automated `UNKNOWN`-outcome reconciliation is present.
@@ -30,6 +31,15 @@ These owner decisions cannot be made by code changes. No provider, region, reten
 - Both scanner and parser clients restrict storage references to explicitly configured buckets. Unit tests verify the tenant/file identity is passed intact. These clients do not prove that remote storage, AV, or parser services have actually been deployed or securely configured.
 - `httpx` is a runtime dependency because the new service adapters import it in application code.
 
+### Current P5-01 model-foundation update
+
+The model transport foundation is now configurable and composable without making it executable:
+
+- `backend/src/moallem/ai/factory.py` builds an empty registry by default, or one explicitly pinned provider when the full configuration group is present.
+- `StaticAIProviderRegistry` uses exact IDs, rejects duplicates, exposes no fallback behavior, and attempts to close all managed adapters.
+- `docs/adr/ADR-018-ai-provider-model-region.md` records that provider/model/region selection remains OPEN; `docs/AI_MODEL_CONFIGURATION.md` documents the safe opt-in transport settings.
+- `DenyAllAIExecution` is unchanged and remains the only default execution policy. No production authorizer, durable budget reservation, settlement/reconciliation worker, live provider credentials, or AI Worker handler was added.
+
 ### Database and migrations
 
 - P5 migration `b51a7c2d9e30` creates usage-ledger and source-provenance tables and composite tenant/course/task relationships.
@@ -41,15 +51,15 @@ These owner decisions cannot be made by code changes. No provider, region, reten
 
 | Check | Result | Evidence / qualification |
 |---|---:|---|
-| Focused AI + file + P5 schema tests | **75 passed** | Includes HTTP adapter contract tests, tenant/file forwarding, fail-closed scanner behavior, and sandbox response constraints. Uses HTTP mock transports, not production services. |
-| Full backend pytest | **406 passed, 45 skipped, 1 failed** | The 45 PostgreSQL tests skip because `MOALLEM_TEST_DATABASE_URL` and a PostgreSQL service are absent. The sole failure occurs when `test_docs_disabled_in_production` constructs a PostgreSQL engine and the environment lacks the declared `psycopg` runtime package. A pip install attempt failed because DNS/network access to PyPI is unavailable. No test was removed or weakened. |
-| `python -m compileall -q src tests scripts alembic/versions` | **PASS** | Python 3.13.5 only; project constraint is `>=3.12,<3.13`. This does not replace validation on Python 3.12. |
+| Focused AI + config tests (current model pass) | **63 passed** | Covers provider registry/factory, transport bounds, contracts, gateway accounting, and optional settings. Uses HTTP mock transports, not production services. |
+| Full backend pytest (current checkout) | **442 passed, 45 skipped, 1 failed** | The 45 PostgreSQL tests skip because `MOALLEM_TEST_DATABASE_URL` and a PostgreSQL service are absent. The sole failure occurs when `test_docs_disabled_in_production` constructs a PostgreSQL engine and the environment lacks the declared `psycopg` runtime package. No test was removed or weakened. |
+| `python -m compileall -q backend/src backend/tests backend/scripts backend/alembic/versions` | **PASS** | Python 3.13.5 only; project constraint is `>=3.12,<3.13`. This does not replace validation on Python 3.12. |
 | `alembic heads` | **PASS** | Exactly one head: `d61f8a2c9e34`. |
 | Full `alembic upgrade head --sql` | **PASS** | Generated PostgreSQL SQL for the entire chain from `base` to head (438 lines). Offline SQL generation only; no database writes occurred. |
 | Full `alembic downgrade head:base --sql` | **PASS** | Generated complete downgrade SQL (222 lines). This does not prove the downgrades execute successfully against populated PostgreSQL data. |
 | `alembic check` | **NOT RUN** | Requires a live database connection/schema reflection. |
 | Live PostgreSQL migrations and integration tests | **NOT RUN** | No PostgreSQL service/URL available. |
-| Ruff / Mypy | **NOT RUN** | Executables are not installed and network access prevents installation. |
+| Ruff / Mypy | **NOT RUN** | Executables/modules are not installed in this environment. |
 | Provider/storage/scanner/parser live E2E | **NOT RUN** | External provider and internal file services are not selected/deployed/approved. |
 
 ## Remaining production gates (not safely closable from this checkout)

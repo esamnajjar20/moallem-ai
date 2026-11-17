@@ -105,6 +105,22 @@ def test_auth_issuer_must_be_https_and_lifetime_bounded(monkeypatch: pytest.Monk
     monkeypatch.setenv("MOALLEM_AUTH_MAX_TOKEN_LIFETIME_SECONDS", "5")
     with pytest.raises(ConfigError):
         load_settings()
+    monkeypatch.setenv("MOALLEM_AUTH_MAX_TOKEN_LIFETIME_SECONDS", "901")
+    with pytest.raises(ConfigError):
+        load_settings()
+
+
+def test_auth_issuer_requires_exact_trailing_slash_and_no_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOALLEM_AUTH_ISSUER", "https://tenant.auth0.com")
+    monkeypatch.setenv("MOALLEM_AUTH_AUDIENCE", "https://api.moallem")
+    monkeypatch.setenv("MOALLEM_AUTH_MAX_TOKEN_LIFETIME_SECONDS", "900")
+    with pytest.raises(ConfigError):
+        load_settings()
+    monkeypatch.setenv("MOALLEM_AUTH_ISSUER", "https://tenant.auth0.com/?x=1")
+    with pytest.raises(ConfigError):
+        load_settings()
 
 
 def test_staging_requires_auth0_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,3 +162,69 @@ def test_idempotency_configuration_requires_key_and_retention(
     with pytest.raises(ConfigError) as exc:
         load_settings()
     assert "must be set together" in str(exc.value)
+
+
+def _set_ai_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in {
+        "PROVIDER_ID": "provider-test",
+        "MODEL_ID": "pinned-model-id",
+        "MODEL_VERSION": "2026-11-17-rev1",
+        "REGION": "eu-test-1",
+        "BASE_URL": "https://api.provider.example/v1",
+        "API_KEY": "topsecret-ai-key",
+        "ALLOWED_HOSTS": '["api.provider.example"]',
+    }.items():
+        monkeypatch.setenv(f"MOALLEM_AI_{name}", value)
+
+
+def test_ai_provider_is_disabled_when_unconfigured() -> None:
+    settings = load_settings()
+    assert settings.ai_provider_id is None
+    assert settings.safe_summary()["ai_provider_configured"] is False
+
+
+def test_ai_provider_configuration_is_all_or_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOALLEM_AI_PROVIDER_ID", "provider-test")
+    with pytest.raises(ConfigError, match="AI provider settings require"):
+        load_settings()
+    _set_ai_provider(monkeypatch)
+    settings = load_settings()
+    assert settings.ai_provider_id == "provider-test"
+    assert settings.ai_allowed_hosts == ("api.provider.example",)
+    assert settings.safe_summary()["ai_provider_configured"] is True
+    assert settings.safe_summary()["ai_api_key_set"] is True
+    assert "topsecret-ai-key" not in repr(settings)
+    assert "topsecret-ai-key" not in str(settings.safe_summary())
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("BASE_URL", "http://api.provider.example/v1"),
+        ("BASE_URL", "https://other.provider.example/v1"),
+        ("BASE_URL", "https://user:secret@api.provider.example/v1"),
+        ("MODEL_VERSION", "latest"),
+        ("ALLOWED_HOSTS", '["*.provider.example"]'),
+        ("ALLOWED_HOSTS", '["127.0.0.1"]'),
+    ],
+)
+def test_ai_provider_configuration_rejects_unsafe_values(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    _set_ai_provider(monkeypatch)
+    monkeypatch.setenv(f"MOALLEM_AI_{name}", value)
+    with pytest.raises(ConfigError):
+        load_settings()
+
+
+def test_ai_provider_payload_and_timeout_limits_are_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_ai_provider(monkeypatch)
+    monkeypatch.setenv("MOALLEM_AI_TIMEOUT_SECONDS", "301")
+    with pytest.raises(ConfigError):
+        load_settings()
+    monkeypatch.setenv("MOALLEM_AI_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("MOALLEM_AI_MAX_REQUEST_BYTES", "16777217")
+    with pytest.raises(ConfigError):
+        load_settings()

@@ -87,6 +87,7 @@ class PostgresSubjectMapper(SubjectMapper):
                 select(UserModel.id).where(
                     UserModel.auth_issuer == issuer,
                     UserModel.auth_subject == subject,
+                    UserModel.auth_status == "ACTIVE",
                 )
             )
             return str(user_id) if user_id is not None else None

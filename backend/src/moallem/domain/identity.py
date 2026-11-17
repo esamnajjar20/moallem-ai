@@ -1,9 +1,9 @@
-"""Bearer authentication core (ADR-017, PROPOSED). Stdlib only; no crypto dependency.
+"""Bearer authentication core for the Auth0 resource-server boundary (ADR-017).
 
-Pipeline: parse `Authorization: Bearer` -> TokenVerifier (signature; issuer/JWKS choice OPEN)
--> claim validation (iss, aud, exp, nbf, lifetime) -> (issuer, sub) -> global user id.
-Every failure is the same AuthenticationRequired with the same message: no oracle for callers.
-Unknown subjects are NOT auto-provisioned.
+Pipeline: parse `Authorization: Bearer` -> RS256 TokenVerifier -> exact claim validation
+(`iss`, `aud`, `exp`, `iat`, optional `nbf`, lifetime) -> pre-provisioned (issuer, subject) map.
+Every failure is the same AuthenticationRequired: no user/token oracle for callers. Unknown
+subjects are never auto-provisioned.
 """
 
 import uuid
@@ -69,24 +69,31 @@ def validate_claims(
     leeway_seconds: int,
     max_lifetime_seconds: int | None,
 ) -> None:
+    if leeway_seconds < 0 or (max_lifetime_seconds is not None and max_lifetime_seconds < 1):
+        raise AuthenticationRequired(_FAIL)
     if claims.issuer != issuer or audience not in claims.audience:
         raise AuthenticationRequired(_FAIL)
-    if not claims.subject:
+    if not claims.subject or len(claims.subject) > 512:
         raise AuthenticationRequired(_FAIL)
     if claims.expires_at is None or now > claims.expires_at + leeway_seconds:
         raise AuthenticationRequired(_FAIL)
     if claims.not_before is not None and now + leeway_seconds < claims.not_before:
         raise AuthenticationRequired(_FAIL)
-    if max_lifetime_seconds is not None and (
-        claims.issued_at is None or claims.expires_at - claims.issued_at > max_lifetime_seconds
-    ):
-        raise AuthenticationRequired(_FAIL)
+    if max_lifetime_seconds is not None:
+        if claims.issued_at is None:
+            raise AuthenticationRequired(_FAIL)
+        if claims.issued_at > now + leeway_seconds:
+            raise AuthenticationRequired(_FAIL)
+        if claims.expires_at <= claims.issued_at:
+            raise AuthenticationRequired(_FAIL)
+        if claims.expires_at - claims.issued_at > max_lifetime_seconds:
+            raise AuthenticationRequired(_FAIL)
 
 
 def _bearer_token(header: str | None) -> str:
     if header is None:
         raise AuthenticationRequired(_FAIL)
-    parts = header.strip().split(" ")
+    parts = header.strip().split()
     if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1]:
         raise AuthenticationRequired(_FAIL)
     return parts[1]

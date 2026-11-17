@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from pydantic import Field
 from threading import Barrier, Event, Lock, get_ident
 
 import pytest
@@ -20,6 +21,35 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from moallem.ai.contracts import ProviderIdentity
+from moallem.ai.quiz.contracts import (
+    AnswerOptionPreview,
+    EducationalScope,
+    QuestionDraftPreview,
+    QuestionPreviewContent,
+    QuizSpec,
+)
+from moallem.ai.quiz.generation import (
+    DraftSourceCitation,
+    QuestionDraft,
+    QuizDraft,
+)
+from moallem.ai.quiz.quality import (
+    QualityRubric,
+    QualityRubricRegistry,
+    QuizQualityValidator,
+    RubricStatus,
+)
+from moallem.ai.quiz.registry import (
+    QuestionTypeDefinition,
+    QuestionTypeRegistry,
+    StrictQuestionPayload,
+)
+from moallem.domain.external import LookupResult, StepState
+from moallem.domain.publishing import (
+    ApprovalDecision,
+    PublishPreflight,
+    SnapshotDescriptor,
+)
 from moallem.ai.usage import (
     UsageLedgerBeginResult,
     UsageLedgerCompletion,
@@ -37,12 +67,14 @@ from moallem.domain.membership import (
 from moallem.domain.secret_encryption import Aes256Gcm
 from moallem.domain.secrets import SecretRef
 from moallem.domain.tasks import TaskStatus
+from moallem.files.context import ContextBuilder
 from moallem.files.contracts import (
     ExtractionProfile,
     FileUpload,
     PersistedChunkInput,
     ScanResult,
     ScanVerdict,
+    SourceChunk,
     SourceFileRegistration,
 )
 from moallem.moodle.service import ConnectionStatus, MoodleConnection
@@ -69,6 +101,10 @@ from moallem.persistence.models import (
     InboxReceiptModel,
     MembershipModel,
     OutboxEventModel,
+    PublishIntentModel,
+    QuizApprovalModel,
+    QuizDraftSnapshotModel,
+    ToolInvocationModel,
     SecretVaultEntryModel,
     SourceChunkModel,
     SourceFileModel,
@@ -84,6 +120,7 @@ from moallem.persistence.repositories import (
     PostgresSubjectMapper,
     new_postgres_connection_repository,
 )
+from moallem.persistence.publishing_repository import PostgresPublicationRepository
 from moallem.persistence.task_repository import (
     IdempotentTaskResult,
     PersistedTask,
@@ -216,6 +253,36 @@ def postgres_task_environment() -> Iterator[PostgresTaskEnvironment]:
     finally:
         try:
             with session_scope(sessions) as session:
+                # Only the disposable integration-test owner disables immutable audit triggers
+                # during teardown. Application code cannot mutate or delete these records.
+                session.execute(
+                    text("ALTER TABLE quiz_approvals DISABLE TRIGGER trg_quiz_approvals_immutable")
+                )
+                session.execute(
+                    text("ALTER TABLE quiz_draft_snapshots DISABLE TRIGGER trg_quiz_draft_snapshots_immutable")
+                )
+                session.execute(
+                    delete(ToolInvocationModel).where(
+                        ToolInvocationModel.tenant_id == tenant_id
+                    )
+                )
+                session.execute(
+                    delete(PublishIntentModel).where(PublishIntentModel.tenant_id == tenant_id)
+                )
+                session.execute(
+                    delete(QuizApprovalModel).where(QuizApprovalModel.tenant_id == tenant_id)
+                )
+                session.execute(
+                    delete(QuizDraftSnapshotModel).where(
+                        QuizDraftSnapshotModel.tenant_id == tenant_id
+                    )
+                )
+                session.execute(
+                    text("ALTER TABLE quiz_draft_snapshots ENABLE TRIGGER trg_quiz_draft_snapshots_immutable")
+                )
+                session.execute(
+                    text("ALTER TABLE quiz_approvals ENABLE TRIGGER trg_quiz_approvals_immutable")
+                )
                 session.execute(
                     delete(AIUsageSourceRefModel).where(
                         AIUsageSourceRefModel.tenant_id == tenant_id
@@ -285,6 +352,165 @@ def _create_task(
     )
 
 
+class _P7ChoiceOption(StrictQuestionPayload):
+    option_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
+class _P7ChoicePayload(StrictQuestionPayload):
+    stem: str = Field(min_length=1)
+    options: list[_P7ChoiceOption] = Field(min_length=2, max_length=5)
+    correct_option_id: str
+    rationale: str
+    points: str
+
+
+def _p7_choice_preview(payload: object) -> QuestionPreviewContent:
+    from typing import cast
+
+    parsed = cast(_P7ChoicePayload, payload)
+    return QuestionPreviewContent(
+        stem=parsed.stem,
+        options=tuple(
+            AnswerOptionPreview(option_id=item.option_id, text=item.text)
+            for item in parsed.options
+        ),
+        correct_answer_preview=parsed.correct_option_id,
+        rationale=parsed.rationale,
+        points=Decimal(parsed.points),
+        difficulty="MEDIUM",
+    )
+
+
+class _AllowPublishPreflightForIntegration:
+    def preflight(self, *, task_id: str, snapshot: SnapshotDescriptor) -> PublishPreflight:
+        assert task_id == snapshot.task_id
+        return PublishPreflight(
+            membership_active=True,
+            permission_granted=True,
+            connection_active=True,
+            course_access_verified=True,
+            create_capability_verified=True,
+            credential_valid=True,
+            quota_reserved=True,
+            site_profile_approved=True,
+            approval_valid=True,
+            snapshot_current=True,
+        )
+
+
+def _p7_fixture_draft(context: PostgresTaskEnvironment, task_id: str):
+    tenant_uuid = uuid.UUID(context.context.tenant_id)
+    membership_uuid = uuid.UUID(context.context.membership_id)
+    source_id, file_id = uuid.uuid4(), uuid.uuid4()
+    source_text = "The Moon orbits Earth."
+    from moallem.domain.canonical import canonical_json
+
+    chunk = SourceChunk(
+        chunk_id=source_id,
+        tenant_id=tenant_uuid,
+        course_id="synthetic-course",
+        file_id=file_id,
+        file_version=1,
+        chunk_index=0,
+        page_number=1,
+        section_path="Astronomy / Moon",
+        content=source_text,
+        content_hash=hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+    )
+    bundle = ContextBuilder().build(
+        tenant_id=tenant_uuid,
+        course_id="synthetic-course",
+        retrieved=(chunk,),
+        max_chunks=5,
+        max_characters=1000,
+    )
+    registry = QuestionTypeRegistry((
+        QuestionTypeDefinition(
+            code="SINGLE_CHOICE",
+            schema_version="integration-choice/1.0",
+            payload_model=_P7ChoicePayload,
+            preview_adapter=_p7_choice_preview,
+        ),
+    ))
+    payload = _P7ChoicePayload(
+        stem="What orbits Earth?",
+        options=[
+            _P7ChoiceOption(option_id="A", text="The Moon"),
+            _P7ChoiceOption(option_id="B", text="Mars"),
+        ],
+        correct_option_id="A",
+        rationale="The source says the Moon orbits Earth.",
+        points="1",
+    )
+    question_id = uuid.uuid4()
+    content_preview = _p7_choice_preview(payload)
+    question_preview = QuestionDraftPreview(
+        question_id=question_id,
+        question_type_code="SINGLE_CHOICE",
+        stem=content_preview.stem,
+        options=content_preview.options,
+        correct_answer_preview=content_preview.correct_answer_preview,
+        rationale=content_preview.rationale,
+        points=content_preview.points,
+        source_refs=(source_id,),
+        unsupported=False,
+        difficulty=content_preview.difficulty,
+    )
+    draft = QuizDraft(
+        draft_id=uuid.uuid4(),
+        tenant_id=tenant_uuid,
+        task_id=uuid.UUID(task_id),
+        actor_membership_id=membership_uuid,
+        course_id="synthetic-course",
+        spec=QuizSpec(
+            name="Integration quiz",
+            question_count=1,
+            question_types=("SINGLE_CHOICE",),
+            maximum_grade=Decimal("1"),
+            language="en",
+        ),
+        educational_scope=EducationalScope(
+            grade_level="Grade 8",
+            subject="Science",
+            curriculum="Synthetic curriculum",
+            learning_objectives=("Identify the Moon's orbit",),
+        ),
+        questions=(QuestionDraft(
+            question_id=question_id,
+            question_type_code="SINGLE_CHOICE",
+            question_type_schema_version="integration-choice/1.0",
+            payload_json=canonical_json(payload.model_dump(mode="json")),
+            preview=question_preview,
+            source_evidence=((source_id, source_text),),
+            unsupported=False,
+            unsupported_reason=None,
+        ),),
+        source_citations=(DraftSourceCitation(
+            source_ref=source_id,
+            file_id=file_id,
+            file_version=1,
+            content_hash=chunk.content_hash,
+            page_number=1,
+            section_path="Astronomy / Moon",
+        ),),
+        context_source_hashes=((source_id, chunk.content_hash),),
+        provider_identity=ProviderIdentity("test-provider", "test-model", "rev-1", "test-region"),
+        prompt_version="integration-prompt/1.0",
+        request_hash="a" * 64,
+        input_tokens=10,
+        output_tokens=10,
+        created_at=datetime.now(UTC),
+    )
+    validator = QuizQualityValidator(
+        question_types=registry,
+        rubrics=QualityRubricRegistry((QualityRubric("integration-rubric/1", RubricStatus.APPROVED),)),
+    )
+    report = validator.validate(draft, bundle, rubric_version="integration-rubric/1")
+    assert not report.hard_failures
+    return draft, report
+
+
 def _create_idempotent_task(
     environment: PostgresTaskEnvironment,
     task_id: str,
@@ -332,6 +558,155 @@ def _alembic_config() -> Config:
     config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
     config.set_main_option("path_separator", "os")
     return config
+
+
+def test_postgres_p7_approval_unknown_reconciliation_and_verified_publish(
+    postgres_task_environment: PostgresTaskEnvironment,
+) -> None:
+    environment = postgres_task_environment
+    task_id = str(uuid.uuid4())
+    _create_task(environment, task_id)
+    with session_scope(environment.sessions) as session:
+        task = session.get(TaskModel, uuid.UUID(task_id))
+        assert task is not None
+        task.status = TaskStatus.VALIDATING.value
+
+    draft, quality_report = _p7_fixture_draft(environment, task_id)
+    repository = PostgresPublicationRepository(
+        environment.sessions,
+        publish_authorizer=_AllowPublishPreflightForIntegration(),
+    )
+    snapshot = repository.create_initial_snapshot(
+        environment.context, task_id, draft, quality_report
+    )
+    assert snapshot.version_no == 1
+    assert len(snapshot.snapshot_hash) == 64
+
+    approval = repository.record_approval(
+        environment.context,
+        task_id=task_id,
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_hash_value=snapshot.snapshot_hash,
+        decision=ApprovalDecision.APPROVED,
+        comment="Reviewed by integration teacher",
+        idempotency_key="p7-integration-approval-key-0001",
+        idempotency_hmac_key=b"p" * 32,
+        approval_ttl_seconds=3600,
+    )
+    approval_replay = repository.record_approval(
+        environment.context,
+        task_id=task_id,
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_hash_value=snapshot.snapshot_hash,
+        decision=ApprovalDecision.APPROVED,
+        comment="Reviewed by integration teacher",
+        idempotency_key="p7-integration-approval-key-0001",
+        idempotency_hmac_key=b"p" * 32,
+        approval_ttl_seconds=3600,
+    )
+    assert approval_replay.replayed is True
+    assert approval.approval_id == approval_replay.approval_id
+
+    intent = repository.create_publish_intent_for_worker(
+        tenant_id=environment.context.tenant_id, task_id=task_id
+    )
+    assert repository.create_publish_intent_for_worker(
+        tenant_id=environment.context.tenant_id, task_id=task_id
+    ).publish_intent_id == intent.publish_intent_id
+    step_key = repository.plan_external_step(
+        tenant_id=environment.context.tenant_id,
+        publish_intent_id=intent.publish_intent_id,
+        step_kind="CREATE_QUIZ",
+        ordinal=0,
+        request={"course_id": "synthetic-course", "name": "Integration quiz"},
+    )
+    # The API-composed repository is deny-all. Only an explicitly injected server authorizer
+    # in this controlled integration fixture can permit dispatch.
+    denied_repository = PostgresPublicationRepository(environment.sessions)
+    with pytest.raises(TaskStateConflict, match="publish preflight blocked"):
+        denied_repository.mark_step_dispatched(
+            tenant_id=environment.context.tenant_id,
+            task_id=task_id,
+            publish_intent_id=intent.publish_intent_id,
+            step_key=step_key,
+        )
+    assert repository.mark_step_dispatched(
+        tenant_id=environment.context.tenant_id,
+        task_id=task_id,
+        publish_intent_id=intent.publish_intent_id,
+        step_key=step_key,
+    ) == 1
+    assert repository.record_step_outcome(
+        tenant_id=environment.context.tenant_id,
+        task_id=task_id,
+        publish_intent_id=intent.publish_intent_id,
+        step_key=step_key,
+        outcome="UNKNOWN",
+    ) is StepState.UNKNOWN
+    assert repository.record_step_outcome(
+        tenant_id=environment.context.tenant_id,
+        task_id=task_id,
+        publish_intent_id=intent.publish_intent_id,
+        step_key=step_key,
+        outcome="UNKNOWN",
+    ) is StepState.UNKNOWN
+    # A lost response is not retried: trusted read-back proves the quiz already exists.
+    assert repository.reconcile_step(
+        tenant_id=environment.context.tenant_id,
+        task_id=task_id,
+        publish_intent_id=intent.publish_intent_id,
+        step_key=step_key,
+        lookup_result=LookupResult.PRESENT,
+        external_ref="quiz-777",
+        response_hash="c" * 64,
+    ) is StepState.RECONCILED_PRESENT
+    assert repository.reconcile_step(
+        tenant_id=environment.context.tenant_id,
+        task_id=task_id,
+        publish_intent_id=intent.publish_intent_id,
+        step_key=step_key,
+        lookup_result=LookupResult.PRESENT,
+        external_ref="quiz-777",
+        response_hash="c" * 64,
+    ) is StepState.RECONCILED_PRESENT
+
+    repository.begin_verification(
+        tenant_id=environment.context.tenant_id,
+        task_id=task_id,
+        publish_intent_id=intent.publish_intent_id,
+    )
+    repository.begin_verification(
+        tenant_id=environment.context.tenant_id,
+        task_id=task_id,
+        publish_intent_id=intent.publish_intent_id,
+    )
+    verification = {
+        "verified": True,
+        "expected_content_match": True,
+        "external_object_type": "QUIZ",
+        "external_object_id": "quiz-777",
+        "snapshot_hash": snapshot.snapshot_hash,
+        "course_id": "synthetic-course",
+    }
+    repository.complete_verified_publish(
+        tenant_id=environment.context.tenant_id,
+        task_id=task_id,
+        publish_intent_id=intent.publish_intent_id,
+        snapshot_hash_value=snapshot.snapshot_hash,
+        verification=verification,
+    )
+    # The worker may retry after losing the DB commit acknowledgement; exact replay is safe.
+    repository.complete_verified_publish(
+        tenant_id=environment.context.tenant_id,
+        task_id=task_id,
+        publish_intent_id=intent.publish_intent_id,
+        snapshot_hash_value=snapshot.snapshot_hash,
+        verification=verification,
+    )
+    result = repository.get_verified_result(environment.context, task_id)
+    assert result["verification_status"] == "VERIFIED"
+    assert result["external_object_id"] == "quiz-777"
+    assert result["snapshot_hash"] == snapshot.snapshot_hash
 
 
 def test_postgres_membership_scoped_repository_and_encrypted_vault() -> None:

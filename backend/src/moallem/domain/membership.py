@@ -1,8 +1,8 @@
 """Active membership context (DEC-039 / GAP-API-005 / AT-037).
 
 The client sends ONLY X-Active-Membership-ID. user, tenant and roles are derived server-side from
-the repository; tenant_id/role sent by the client are never read. Authentication itself (ADR-017)
-is OUT of scope here: `authenticated_user_id` must come from a verified session by the caller.
+the repository; tenant_id/role sent by the client are never read. The caller supplies
+`authenticated_user_id` resolved from the verified Auth0 access token.
 """
 
 import uuid

@@ -1,8 +1,4 @@
-"""Request-context dependencies. UNRUN: needs fastapi (sandbox had no network).
-
-Authentication (ADR-017) is OPEN. `Authenticator` is the seam; the only implementation here is
-DevAuthenticator, refused outside development/test. It trusts a header: never for production.
-"""
+"""Request-context dependencies for Auth0 bearer authentication and active memberships."""
 
 import time
 from collections.abc import Callable
@@ -21,7 +17,7 @@ class Authenticator(Protocol):
 
 
 class NoAuthenticator:
-    """Default until ADR-017 closes: every request is unauthenticated (fail closed)."""
+    """Explicit fail-closed authenticator for deployments without an approved IdP config."""
 
     def user_id(self, request: Request) -> str:
         raise AuthenticationRequired("authentication required")
@@ -42,11 +38,7 @@ class DevAuthenticator:
 
 
 class BearerAuthenticator:
-    """ADR-017 seam (PROPOSED): Bearer token -> verified claims -> mapped global user.
-
-    Signature verification lives in the injected TokenVerifier (issuer/JWKS choice is OPEN).
-    Not wired into create_app until issuer/audience settings are approved.
-    """
+    """Auth0 access token -> verified claims -> pre-provisioned ACTIVE global user."""
 
     def __init__(
         self,

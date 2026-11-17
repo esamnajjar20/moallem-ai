@@ -44,11 +44,18 @@ class UserModel(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("auth_issuer", "auth_subject", name="uq_users_auth_identity"),
+        CheckConstraint(
+            "auth_status IN ('ACTIVE', 'SUSPENDED', 'REVOKED')",
+            name="ck_users_auth_status",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     auth_issuer: Mapped[str] = mapped_column(String(512), nullable=False)
     auth_subject: Mapped[str] = mapped_column(String(512), nullable=False)
+    auth_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="ACTIVE"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -169,6 +176,7 @@ class TaskModel(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+    result_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 class TaskEventModel(Base):
@@ -616,3 +624,225 @@ class AIUsageSourceRefModel(Base):
     invocation_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     course_id: Mapped[str] = mapped_column(String(128), nullable=False)
     source_chunk_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+
+
+class QuizDraftSnapshotModel(Base):
+    """Append-only server-owned preview snapshot bound to one task and destination."""
+
+    __tablename__ = "quiz_draft_snapshots"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_quiz_draft_snapshots_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "task_id", "version_no", name="uq_quiz_draft_snapshots_version"
+        ),
+        UniqueConstraint(
+            "tenant_id", "task_id", "snapshot_hash", name="uq_quiz_draft_snapshots_hash"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id"],
+            ["tasks.tenant_id", "tasks.id"],
+            name="fk_quiz_draft_snapshots_task",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "created_by_membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_quiz_draft_snapshots_membership",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("version_no >= 1", name="ck_quiz_draft_snapshots_version"),
+        CheckConstraint(
+            "snapshot_hash ~ '^[0-9a-f]{64}$'", name="ck_quiz_draft_snapshots_hash"
+        ),
+        Index("ix_quiz_draft_snapshots_task_version", "tenant_id", "task_id", "version_no"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    task_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(128), nullable=False)
+    destination: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    quality_report: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_by_membership_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class QuizApprovalModel(Base):
+    """Append-only approval decision for exactly one immutable snapshot hash."""
+
+    __tablename__ = "quiz_approvals"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_quiz_approvals_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "task_id", "snapshot_id", "approver_membership_id",
+            name="uq_quiz_approvals_actor_snapshot",
+        ),
+        UniqueConstraint(
+            "tenant_id", "approver_membership_id", "idempotency_key_hash",
+            name="uq_quiz_approvals_idempotency",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id"],
+            ["tasks.tenant_id", "tasks.id"],
+            name="fk_quiz_approvals_task",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "snapshot_id"],
+            ["quiz_draft_snapshots.tenant_id", "quiz_draft_snapshots.id"],
+            name="fk_quiz_approvals_snapshot",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "approver_membership_id"],
+            ["memberships.tenant_id", "memberships.id"],
+            name="fk_quiz_approvals_membership",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "decision IN ('APPROVED', 'REJECTED')", name="ck_quiz_approvals_decision"
+        ),
+        CheckConstraint(
+            "snapshot_hash ~ '^[0-9a-f]{64}$'", name="ck_quiz_approvals_snapshot_hash"
+        ),
+        CheckConstraint(
+            "idempotency_key_hash ~ '^[0-9a-f]{64}$'", name="ck_quiz_approvals_idempotency_hash"
+        ),
+        CheckConstraint("request_hash ~ '^[0-9a-f]{64}$'", name="ck_quiz_approvals_request_hash"),
+        CheckConstraint("expires_at > decided_at", name="ck_quiz_approvals_expiry"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    task_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    approver_membership_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    comment: Mapped[str | None] = mapped_column(String(2000))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PublishIntentModel(Base):
+    """Durable single logical publish attempt tied to an approved snapshot."""
+
+    __tablename__ = "publish_intents"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_publish_intents_tenant_id"),
+        UniqueConstraint(
+            "tenant_id", "task_id", "snapshot_id", name="uq_publish_intents_task_snapshot"
+        ),
+        UniqueConstraint(
+            "tenant_id", "external_operation_key", name="uq_publish_intents_operation_key"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "task_id"],
+            ["tasks.tenant_id", "tasks.id"],
+            name="fk_publish_intents_task",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "snapshot_id"],
+            ["quiz_draft_snapshots.tenant_id", "quiz_draft_snapshots.id"],
+            name="fk_publish_intents_snapshot",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "approval_id"],
+            ["quiz_approvals.tenant_id", "quiz_approvals.id"],
+            name="fk_publish_intents_approval",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "state IN ('PREPARED', 'EXECUTING', 'VERIFYING', 'COMPLETED', "
+            "'NEEDS_RECONCILIATION', 'FAILED', 'MANUAL_REVIEW')",
+            name="ck_publish_intents_state",
+        ),
+        CheckConstraint(
+            "snapshot_hash ~ '^[0-9a-f]{64}$'", name="ck_publish_intents_snapshot_hash"
+        ),
+        CheckConstraint(
+            "external_operation_key ~ '^[0-9a-f]{64}$'", name="ck_publish_intents_operation_key"
+        ),
+        Index("ix_publish_intents_state_created", "state", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    task_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    snapshot_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    approval_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    snapshot_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    external_operation_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, server_default="PREPARED")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ToolInvocationModel(Base):
+    """Durable external-step ledger; attempt_no is not part of step identity."""
+
+    __tablename__ = "tool_invocations"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "publish_intent_id", "external_step_key",
+            name="uq_tool_invocations_step_key",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "publish_intent_id"],
+            ["publish_intents.tenant_id", "publish_intents.id"],
+            name="fk_tool_invocations_publish_intent",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("ordinal >= 0", name="ck_tool_invocations_ordinal"),
+        CheckConstraint("attempt_no >= 0", name="ck_tool_invocations_attempt"),
+        CheckConstraint(
+            "state IN ('PLANNED', 'DISPATCHED', 'SUCCEEDED', 'FAILED_DEFINITE', 'UNKNOWN', "
+            "'RECONCILED_PRESENT', 'RECONCILED_ABSENT', 'MANUAL_REVIEW')",
+            name="ck_tool_invocations_state",
+        ),
+        CheckConstraint(
+            "external_step_key ~ '^[0-9a-f]{64}$'", name="ck_tool_invocations_step_key"
+        ),
+        CheckConstraint(
+            "request_hash IS NULL OR request_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_tool_invocations_request_hash",
+        ),
+        CheckConstraint(
+            "response_hash IS NULL OR response_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_tool_invocations_response_hash",
+        ),
+        Index("ix_tool_invocations_intent_state", "tenant_id", "publish_intent_id", "state"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    publish_intent_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    external_step_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    step_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    request_hash: Mapped[str | None] = mapped_column(String(64))
+    response_hash: Mapped[str | None] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(32), nullable=False, server_default="PLANNED")
+    external_ref: Mapped[str | None] = mapped_column(String(512))
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

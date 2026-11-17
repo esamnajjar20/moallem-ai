@@ -1,6 +1,6 @@
 """Provider adapter contract. Concrete network adapters require ADR-018 approval."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from decimal import Decimal
 from typing import Protocol
 
@@ -45,6 +45,44 @@ class AIProviderRegistry(Protocol):
     def get(self, provider_id: str) -> AIProvider: ...
 
     def provider_ids(self) -> Sequence[str]: ...
+
+
+class StaticAIProviderRegistry:
+    """Immutable exact-ID registry; it never chooses a fallback provider."""
+
+    def __init__(self, providers: Iterable[AIProvider] = ()) -> None:
+        entries: dict[str, AIProvider] = {}
+        for provider in providers:
+            provider_id = provider.identity.provider_id
+            if provider_id in entries:
+                raise ValueError("AI provider IDs must be unique")
+            entries[provider_id] = provider
+        self._providers = entries
+
+    def get(self, provider_id: str) -> AIProvider:
+        from moallem.ai.errors import AIProviderNotConfigured
+
+        provider = self._providers.get(provider_id)
+        if provider is None:
+            raise AIProviderNotConfigured("requested AI provider is not registered")
+        return provider
+
+    def provider_ids(self) -> Sequence[str]:
+        return tuple(sorted(self._providers))
+
+    async def aclose(self) -> None:
+        """Close every owned adapter, including when one close operation fails."""
+        import asyncio
+
+        close_operations = []
+        for provider in self._providers.values():
+            close = getattr(provider, "aclose", None)
+            if callable(close):
+                close_operations.append(close())
+        results = await asyncio.gather(*close_operations, return_exceptions=True)
+        failures = [result for result in results if isinstance(result, BaseException)]
+        if failures:
+            raise RuntimeError("one or more AI provider clients failed to close") from failures[0]
 
 
 class DenyAllAIExecution:

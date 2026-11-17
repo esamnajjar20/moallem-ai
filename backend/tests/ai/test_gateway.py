@@ -26,6 +26,7 @@ from moallem.ai.errors import (
     AIInvocationConflict,
     AIProviderFailure,
     AIProviderOutcomeUnknown,
+    AIUsageAccountingUnknown,
 )
 from moallem.ai.gateway import AIGateway
 from moallem.ai.provider import DenyAllAIExecution
@@ -340,3 +341,46 @@ def test_cancellation_after_provider_response_waits_for_usage_and_budget_settlem
     assert provider.calls == 1
     assert len(ledger.completions) == 1
     assert authorizer.settled == [("budget-reservation-1", ledger.completions[0].cost_amount)]
+
+
+def test_ai_request_rejects_unbounded_messages_and_content() -> None:
+    request = make_request()
+    with pytest.raises(ValueError, match="messages"):
+        replace(request, messages=tuple(request.messages * 65))
+    with pytest.raises(ValueError, match="1MiB"):
+        replace(request, messages=(AIMessage(AIMessageRole.USER, "x" * (1024 * 1024 + 1)),))
+    with pytest.raises(ValueError, match="NUL"):
+        AIMessage(AIMessageRole.USER, "bad\x00content")
+
+
+def test_cost_calculation_overflow_is_marked_unknown_and_keeps_reservation() -> None:
+    request = make_request()
+    expensive_pricing = ModelPricing(
+        provider_id=IDENTITY.provider_id,
+        model_id=IDENTITY.model_id,
+        model_version=IDENTITY.model_version,
+        region=IDENTITY.region,
+        pricing_version="price-overflow",
+        currency="USD",
+        input_cost_per_million_tokens=Decimal("999999999999.000000000000"),
+        output_cost_per_million_tokens=Decimal("0"),
+    )
+    permit = replace(make_permit(request), pricing=expensive_pricing)
+    provider = FakeProvider(
+        response=AIProviderResponse(
+            identity=IDENTITY,
+            output_text="known result",
+            usage=TokenUsage(input_tokens=2**63 - 1, output_tokens=0),
+        )
+    )
+    ledger = FakeLedger()
+    authorizer = FakeAuthorizer(permit)
+    gateway = AIGateway(provider=provider, authorizer=authorizer, usage_ledger=ledger)
+
+    with pytest.raises(AIUsageAccountingUnknown):
+        asyncio.run(gateway.generate(request))
+
+    assert ledger.unknown[0].safe_error_code == "AI_USAGE_COST_CALCULATION_FAILED"
+    assert ledger.completions == []
+    assert authorizer.released == []
+    assert authorizer.settled == []

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 
 import httpx
@@ -30,11 +31,17 @@ def request() -> AIRequest:
     )
 
 
-def provider(handler) -> OpenAICompatibleHTTPProvider:
+def provider(
+    handler,
+    *,
+    max_request_bytes: int = 2 * 1024 * 1024,
+) -> OpenAICompatibleHTTPProvider:
     return OpenAICompatibleHTTPProvider(
         identity=IDENTITY,
         base_url="https://provider.example.test/v1",
         api_key="test-secret",
+        allowed_hosts=("provider.example.test",),
+        max_request_bytes=max_request_bytes,
         client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 
@@ -125,12 +132,14 @@ def test_http_provider_validates_endpoint_and_timeout() -> None:
             identity=IDENTITY,
             base_url="http://provider.example.test/v1",
             api_key="secret",
+            allowed_hosts=("provider.example.test",),
         )
     with pytest.raises(ValueError):
         OpenAICompatibleHTTPProvider(
             identity=IDENTITY,
             base_url="https://user:pass@provider.example.test/v1",
             api_key="secret",
+            allowed_hosts=("provider.example.test",),
         )
 
 
@@ -143,4 +152,73 @@ def test_http_provider_timeout_is_an_ambiguous_non_retryable_outcome() -> None:
         asyncio.run(client.generate(request()))
     assert exc.value.definitive is False
     assert str(exc.value) == "AI_PROVIDER_TRANSPORT_UNKNOWN"
+    asyncio.run(client.aclose())
+
+
+def test_http_provider_requires_exact_dns_hostname_allowlist() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("invalid endpoint must not dispatch")
+
+    with pytest.raises(ValueError, match="not allow-listed"):
+        OpenAICompatibleHTTPProvider(
+            identity=IDENTITY,
+            base_url="https://other.example.test/v1",
+            api_key="secret",
+            allowed_hosts=("provider.example.test",),
+            client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+    with pytest.raises(ValueError, match="DNS hostname"):
+        OpenAICompatibleHTTPProvider(
+            identity=IDENTITY,
+            base_url="https://127.0.0.1/v1",
+            api_key="secret",
+            allowed_hosts=("127.0.0.1",),
+        )
+
+
+def test_http_provider_rejects_oversized_request_before_dispatch() -> None:
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500)
+
+    client = provider(handler, max_request_bytes=1024)
+    with pytest.raises(AIProviderFailure) as exc:
+        asyncio.run(client.generate(request_with_content("x" * 2048)))
+    assert exc.value.safe_code == "AI_PROVIDER_REQUEST_TOO_LARGE"
+    assert exc.value.definitive is True
+    assert calls == 0
+    asyncio.run(client.aclose())
+
+
+def request_with_content(content: str) -> AIRequest:
+    base = request()
+    return AIRequest(
+        tenant_id=base.tenant_id,
+        task_id=base.task_id,
+        actor_membership_id=base.actor_membership_id,
+        course_id=base.course_id,
+        invocation_id=base.invocation_id,
+        prompt_version=base.prompt_version,
+        messages=(AIMessage(AIMessageRole.USER, content),),
+        max_output_tokens=base.max_output_tokens,
+        data_classes=base.data_classes,
+    )
+
+
+def test_http_provider_rejects_compressed_responses() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-encoding": "gzip"},
+            content=gzip.compress(b"compressed response must be rejected"),
+        )
+
+    client = provider(handler)
+    with pytest.raises(AIProviderFailure) as exc:
+        asyncio.run(client.generate(request()))
+    assert exc.value.safe_code == "AI_PROVIDER_COMPRESSED_RESPONSE_UNSUPPORTED"
+    assert exc.value.definitive is False
     asyncio.run(client.aclose())

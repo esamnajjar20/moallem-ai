@@ -18,7 +18,7 @@
 |---|---|---|---|---|
 | ADR-015 | Flutter state management (Riverpod vs Bloc) | OPEN | Mobile Lead | Prototype صغير + قابلية الاختبار والصيانة وتوافق الفريق؛ لا يُعد مانعاً لقرارات Moodle. |
 | ADR-016 | Python type checker (Pyright vs mypy) | OPEN | Backend Lead | تجربة CI صارمة على مشروع نموذجي وتوثيق سياسة strictness. |
-| ADR-017 | Identity/authentication/session flow | OPEN | Product + Security | Auth0 provider selected by Project Owner on 2026-11-16; issuer/audience, subject/account linking, access/refresh, rotation/revocation, MFA, logout/session invalidation remain open. See `Owner_Approval_Record_v2.4_2026-11-16.md`. |
+| ADR-017 | Identity/authentication/session flow | IMPLEMENTED / VERIFY EXTERNAL | Product + Security | Backend MVP decision and implementation recorded in `docs/adr/ADR-017-authentication-and-session.md`: Auth0 OIDC PKCE client, RS256 API access tokens <=900s, rotating refresh tokens on native SDK, pre-provisioned subject mapping, immediate API deny for SUSPENDED/REVOKED users, MFA required in Auth0 MVP policy. Live tenant and Android/iOS device evidence remain a release gate. |
 | ADR-018 | AI provider/model/data region | OPEN | Product + Privacy | العربية، جودة التعليم، شروط البيانات، الاحتفاظ، region، التكلفة، latency وfallback. |
 | ADR-019 | SSE vs polling | OPEN | Backend + Mobile | مقارنة على شبكة ضعيفة/بطارية/عدد الاتصالات؛ GET task status يبقى مصدر الحالة. |
 | ADR-020 | Hosting provider/region/network | OPEN | Product + Infra | PostgreSQL and AES-256-GCM selected for P4 on 2026-11-16; hosting, residency, egress, availability, budget, backup, Moodle/AI connectivity remain open. See owner approval record. |
@@ -105,7 +105,7 @@
 
 | ID | النوع | القرار | الحالة | المالك | بوابة الإغلاق / معيار القرار |
 |---|---|---|---|---|---|
-| DEC-039 | DEC / Identity & Tenancy | طريقة تمرير سياق العضوية النشطة في الطلبات متعددة المؤسسات | PROPOSED | Backend + Security + Product | اعتماد X-Active-Membership-ID إلزاميًا لكل طلب tenant-scoped عدا GET /me؛ الخادم يشتق user/tenant/roles من بيانات موثوقة ويتحقق من owner + ACTIVE + permission في كل طلب. READY_FOR_APPROVAL؛ Auth issuer/session ما زال ADR-017. |
+| DEC-039 | DEC / Identity & Tenancy | طريقة تمرير سياق العضوية النشطة في الطلبات متعددة المؤسسات | PROPOSED | Backend + Security + Product | اعتماد X-Active-Membership-ID إلزاميًا لكل طلب tenant-scoped عدا GET /me؛ الخادم يشتق user/tenant/roles من بيانات موثوقة ويتحقق من owner + ACTIVE + permission في كل طلب. READY_FOR_APPROVAL؛ Auth0 token/session implementation is recorded under ADR-017. |
 | DEC-040 | DEC / Moodle Connection | دورة إنشاء/ربط اتصال Moodle وإدارة بيانات الاعتماد | PROPOSED | Product + Security + Integration | MVP يستخدم legacy External Web Services token لمستخدم Moodle مخوّل وخدمة مخصصة؛ enroll/validate/rotate/local disconnect؛ vault-only storage؛ remote revoke في Moodle Admin ما لم يثبت Plugin/API. لا ادعاء domain ownership بمجرد token. READY_FOR_APPROVAL؛ site mapping BLOCKED. |
 | DEC-041 | DEC / Reliability | هرم معرفات نية النشر والعملية الخارجية والخطوة الخارجية | PROPOSED | Backend + Integration | اعتماد هرم ثابت: publish_intent_id + external_operation_key + external_step_key؛ attempt_no عداد نقل فقط؛ قيد UNIQUE على tenant/publish_intent/step؛ UNKNOWN لا يعاد إلا بعد إثبات الغياب. READY_FOR_APPROVAL. |
 | DEC-042 | DEC / Task Lifecycle | سلوك الإلغاء بعد إرسال كتابة خارجية | PROPOSED | Backend + Product + Integration | Cancel هو intent. قبل dispatch يجوز CANCELLED؛ بعد dispatch يبقى cancel_requested مع EXECUTING أو NEEDS_RECONCILIATION حتى يثبت الغياب أو تتم تسوية الأثر. UNKNOWN لا يساوي CANCELLED. READY_FOR_APPROVAL. |
@@ -158,7 +158,7 @@
 | P0-L | Postgres idempotency/outbox/inbox/tool ledger، per-step identity، cancel intent/reconciliation، sequence events. | `Specifications/03_04_Reliability_and_Tool_Registry_v2.4_Addendum.docx` | اختيار broker DEC-030 + اختبار Moodle/Plugin للـlookup؛ بدونه manual reconciliation. |
 
 ### L.1 ما لا يغلق تلقائيًا
-- `ADR-017` مزود الهوية والجلسات ما زال OPEN؛ header لا يحل authentication.
+- تنفيذ Backend لـ`ADR-017` أصبح IMPLEMENTED؛ لا تُعتبر بوابة Auth0/PKCE مغلقة قبل اختبار tenant حقيقي وأجهزة Android/iOS. Header العضوية ليس دليل هوية.
 - `DEC-033/034` أنواع الأسئلة والـGolden Dataset ما زالت OPEN.
 - `DEC-030` وسيط الطابور و`ADR-018/020` و`DEC-028/029` مزود AI/المنطقة/الأسرار/الاحتفاظ ما زالت OPEN.
 - `EXT-MDL-*` و`VER-MDL-*` لا تُغلق دون بيئة Moodle المستهدفة وأدلة حية.
@@ -172,8 +172,9 @@
 
 The Project Owner approved v2.4 as the planning baseline and selected Auth0, PostgreSQL, and
 AES-256-GCM for the scoped implementation work. The exact approval and residual open items are in
-`Planning/Owner_Approval_Record_v2.4_2026-11-16.md`. This approval does not close ADR-017, ADR-020,
-DEC-029, DEC-030, DEC-031, DEC-032, DEC-033, DEC-034, or any Moodle external/verification item.
+`Planning/Owner_Approval_Record_v2.4_2026-11-16.md`. ADR-017's Backend MVP implementation is now
+recorded separately; this does not close live Auth0/device verification, ADR-020, DEC-029,
+DEC-030, DEC-031, DEC-032, DEC-033, DEC-034, or any Moodle external/verification item.
 
 
 ## إضافات P0-L التفصيلية

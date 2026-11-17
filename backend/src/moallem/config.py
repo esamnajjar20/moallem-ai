@@ -8,6 +8,7 @@ Rules:
 
 import base64
 import binascii
+import ipaddress
 from enum import StrEnum
 from typing import Self
 from urllib.parse import urlsplit
@@ -51,12 +52,25 @@ class Settings(BaseSettings):
     database_url: SecretStr | None = None
     redis_url: SecretStr | None = None
     readiness_timeout_seconds: float = 2.0
-    auth_issuer: str | None = None  # Auth0 issuer URL; keep trailing slash
-    auth_audience: str | None = None  # Auth0 API identifier
-    auth_max_token_lifetime_seconds: int | None = None
+    auth_issuer: str | None = None  # Exact Auth0 OIDC issuer, including trailing slash
+    auth_audience: str | None = None  # Exact Auth0 API identifier
+    auth_max_token_lifetime_seconds: int | None = None  # MVP access-token ceiling: 15 minutes
+    # Optional, explicitly pinned AI provider configuration. It registers a transport only;
+    # it never authorizes model execution. ADR-018/DEC-043 remain separate gates.
+    ai_provider_id: str | None = None
+    ai_model_id: str | None = None
+    ai_model_version: str | None = None
+    ai_region: str | None = None
+    ai_base_url: str | None = None
+    ai_api_key: SecretStr | None = None
+    ai_allowed_hosts: tuple[str, ...] | None = None
+    ai_timeout_seconds: float = 60.0
+    ai_max_request_bytes: int = 2 * 1024 * 1024
+    ai_max_response_bytes: int = 2 * 1024 * 1024
     secret_encryption_key: SecretStr | None = None
     idempotency_hmac_key: SecretStr | None = None
     idempotency_retention_seconds: int | None = None
+    approval_ttl_seconds: int | None = None
     event_cursor_hmac_key: SecretStr | None = None
     task_queue_poll_seconds: float | None = None
     task_queue_batch_size: int | None = None
@@ -75,6 +89,58 @@ class Settings(BaseSettings):
         if not 0 < v <= 10:
             raise ValueError("must be > 0 and <= 10")
         return v
+
+    @field_validator("ai_allowed_hosts")
+    @classmethod
+    def _ai_allowed_hosts(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        if not value or len(value) > 16:
+            raise ValueError("ai_allowed_hosts must contain 1..16 exact hostnames")
+        normalized: list[str] = []
+        for host in value:
+            if not isinstance(host, str) or not host or host != host.strip():
+                raise ValueError("ai_allowed_hosts entries must be exact hostnames")
+            candidate = host.rstrip(".").encode("idna").decode("ascii").lower()
+            if (
+                not candidate
+                or "*" in candidate
+                or "/" in candidate
+                or ":" in candidate
+                or any(ord(char) <= 0x20 or ord(char) == 0x7F for char in candidate)
+            ):
+                raise ValueError("ai_allowed_hosts entries must be exact DNS hostnames")
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                pass
+            else:
+                raise ValueError("ai_allowed_hosts must use DNS hostnames, not IP literals")
+            if candidate in normalized:
+                raise ValueError("ai_allowed_hosts must not contain duplicates")
+            normalized.append(candidate)
+        return tuple(normalized)
+
+    @field_validator("ai_timeout_seconds")
+    @classmethod
+    def _ai_timeout(cls, value: float) -> float:
+        if not 0 < value <= 300:
+            raise ValueError("ai_timeout_seconds must be > 0 and <= 300")
+        return value
+
+    @field_validator("ai_max_request_bytes", "ai_max_response_bytes")
+    @classmethod
+    def _ai_payload_limit(cls, value: int, info: ValidationInfo) -> int:
+        if not 1024 <= value <= 16 * 1024 * 1024:
+            raise ValueError(f"{info.field_name} must be 1KiB..16MiB")
+        return value
+
+    @field_validator("approval_ttl_seconds")
+    @classmethod
+    def _approval_ttl(cls, value: int | None) -> int | None:
+        if value is not None and not 60 <= value <= 86_400:
+            raise ValueError("approval_ttl_seconds must be between 60 and 86400")
+        return value
 
     @field_validator("database_url")
     @classmethod
@@ -113,15 +179,83 @@ class Settings(BaseSettings):
             raise ValueError(
                 "auth_issuer, auth_audience and auth_max_token_lifetime_seconds go together"
             )
-        if self.auth_issuer is not None and urlsplit(self.auth_issuer).scheme != "https":
-            raise ValueError("auth_issuer must be an https URL")
+        if self.auth_issuer is not None:
+            issuer = urlsplit(self.auth_issuer)
+            if (
+                issuer.scheme != "https"
+                or not issuer.hostname
+                or issuer.username is not None
+                or issuer.password is not None
+                or issuer.query
+                or issuer.fragment
+                or issuer.path not in ("", "/")
+                or not self.auth_issuer.endswith("/")
+            ):
+                raise ValueError(
+                    "auth_issuer must be an exact HTTPS issuer URL ending in /"
+                )
+        if self.auth_audience is not None and (
+            not self.auth_audience.strip()
+            or self.auth_audience != self.auth_audience.strip()
+            or len(self.auth_audience) > 512
+        ):
+            raise ValueError("auth_audience must be a non-empty exact API identifier")
         lifetime = self.auth_max_token_lifetime_seconds
-        if lifetime is not None and not 60 <= lifetime <= 86400:
-            raise ValueError("auth_max_token_lifetime_seconds must be 60..86400")
+        if lifetime is not None and not 60 <= lifetime <= 900:
+            raise ValueError("auth_max_token_lifetime_seconds must be 60..900 for the MVP")
         if self.env in (Environment.STAGING, Environment.PRODUCTION) and self.auth_issuer is None:
             raise ValueError(
                 "Auth0 issuer, audience and token lifetime are required outside dev/test"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _ai_provider_settings(self) -> Self:
+        identity_and_transport = (
+            self.ai_provider_id,
+            self.ai_model_id,
+            self.ai_model_version,
+            self.ai_region,
+            self.ai_base_url,
+            self.ai_api_key,
+            self.ai_allowed_hosts,
+        )
+        if any(value is not None for value in identity_and_transport) and not all(
+            value is not None for value in identity_and_transport
+        ):
+            raise ValueError(
+                "AI provider settings require provider/model/version/region/base URL/API key/allowed hosts"
+            )
+        if self.ai_provider_id is not None:
+            for name, value, max_length in (
+                ("ai_provider_id", self.ai_provider_id, 128),
+                ("ai_model_id", self.ai_model_id, 255),
+                ("ai_model_version", self.ai_model_version, 128),
+                ("ai_region", self.ai_region, 64),
+            ):
+                if value is None or not value or value != value.strip() or len(value) > max_length:
+                    raise ValueError(f"{name} must be 1..{max_length} trimmed characters")
+            if self.ai_model_version is not None and self.ai_model_version.casefold() in {
+                "latest", "stable", "default", "current"
+            }:
+                raise ValueError("ai_model_version must identify a pinned revision, not an alias")
+            assert self.ai_base_url is not None  # noqa: S101
+            assert self.ai_allowed_hosts is not None  # noqa: S101
+            parsed = urlsplit(self.ai_base_url)
+            if (
+                parsed.scheme.lower() != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+                or "\\" in self.ai_base_url
+                or any(ord(char) <= 0x20 or ord(char) == 0x7F for char in self.ai_base_url)
+            ):
+                raise ValueError("ai_base_url must be an absolute HTTPS URL without credentials")
+            host = parsed.hostname.encode("idna").decode("ascii").lower().rstrip(".")
+            if host not in self.ai_allowed_hosts:
+                raise ValueError("ai_base_url hostname must exactly match ai_allowed_hosts")
         return self
 
     @model_validator(mode="after")
@@ -246,8 +380,11 @@ class Settings(BaseSettings):
             "redis_url_set": self.redis_url is not None,
             "readiness_timeout_seconds": self.readiness_timeout_seconds,
             "auth_configured": self.auth_issuer is not None,
+            "ai_provider_configured": self.ai_provider_id is not None,
+            "ai_api_key_set": self.ai_api_key is not None,
             "secret_encryption_key_set": self.secret_encryption_key is not None,
             "idempotency_configured": self.idempotency_hmac_key is not None,
+            "approval_policy_configured": self.approval_ttl_seconds is not None,
             "event_cursor_configured": self.event_cursor_hmac_key is not None,
             "task_queue_poll_seconds": self.task_queue_poll_seconds,
             "task_queue_batch_size": self.task_queue_batch_size,

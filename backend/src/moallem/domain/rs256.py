@@ -7,6 +7,7 @@ controlled clock.
 
 import base64
 import binascii
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -95,7 +96,10 @@ def _number(value: Any) -> float | None:
         return None
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ValueError("invalid numeric claim")
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("invalid numeric claim")
+    return number
 
 
 class Rs256Verifier:

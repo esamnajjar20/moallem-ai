@@ -87,8 +87,11 @@ class TaskEventType(StrEnum):
     DRAFT_READY = "DRAFT_READY"
     VALIDATION_COMPLETED = "VALIDATION_COMPLETED"
     APPROVAL_RECORDED = "APPROVAL_RECORDED"
+    PUBLISH_PREPARED = "PUBLISH_PREPARED"
     CANCEL_REQUESTED = "CANCEL_REQUESTED"
     EXTERNAL_DISPATCHED = "EXTERNAL_DISPATCHED"
+    EXTERNAL_STEP_SUCCEEDED = "EXTERNAL_STEP_SUCCEEDED"
+    EXTERNAL_STEP_FAILED = "EXTERNAL_STEP_FAILED"
     EXTERNAL_OUTCOME_UNKNOWN = "EXTERNAL_OUTCOME_UNKNOWN"
     RECONCILIATION_UPDATED = "RECONCILIATION_UPDATED"
     TASK_RECOVERED = "TASK_RECOVERED"
@@ -115,3 +118,53 @@ class TaskEventPage(BaseModel):
     next_cursor: str | None
     has_more: bool
     oldest_available_sequence: int = Field(ge=1)
+
+
+class TaskSnapshotDestination(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: UUID
+    course_id: str = Field(min_length=1, max_length=128)
+
+
+class TaskSnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: UUID
+    version_no: int = Field(ge=1)
+    snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    destination: TaskSnapshotDestination
+    schema_version: str = Field(min_length=1, max_length=128)
+    content: dict[str, object]
+    quality_report: dict[str, object]
+
+
+class ApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["APPROVED", "REJECTED"]
+    snapshot_id: UUID
+    snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    comment: str | None = Field(default=None, max_length=2000)
+
+
+class ApprovalResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    approval_id: UUID
+    decision: Literal["APPROVED", "REJECTED"]
+    snapshot_id: UUID
+    decided_at: datetime
+    expires_at: datetime
+
+
+class TaskResultResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    external_object_type: Literal["QUIZ"]
+    external_object_id: str = Field(min_length=1, max_length=512)
+    verification_status: Literal["VERIFIED"]
+    verified_at: datetime
+    snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    course_id: str = Field(min_length=1, max_length=128)
+    expected_content_match: Literal[True]

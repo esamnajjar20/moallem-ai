@@ -4,7 +4,7 @@ info:
   version: 0.4.0-draft
   description: Planning draft v2.4. Membership header, Moodle connection lifecycle,
     typed transport DTOs, error codes, and sequence-based event cursors have proposed
-    baselines. This remains non-final pending owner approval, identity provider decision,
+    baselines. This remains non-final pending owner approval and remaining policy decisions,
     question-domain decision DEC-033, and site-specific Moodle evidence.
 servers:
 - url: https://{host}/api/v1
@@ -16,8 +16,9 @@ security:
 x-planning-status: READY_FOR_OWNER_REVIEW_NOT_FROZEN
 x-open-contract-gaps:
 - id: ADR-017
-  description: Authentication issuer, subject mapping, refresh rotation, MFA, and
-    session revocation remain unselected.
+  description: Auth0 backend resource-server behavior is implemented for the MVP;
+    Auth0 tenant setup and real Android/iOS PKCE, secure storage, refresh and logout
+    acceptance checks remain external release evidence.
 - id: DEC-033
   description: Question type set and full question payload union must be selected
     by Product/Education before generation/write contract freeze.
@@ -297,43 +298,6 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '429':
           $ref: '#/components/responses/RateLimited'
-  /tasks/{task_id}/revisions:
-    post:
-      operationId: createTaskRevision
-      parameters:
-      - $ref: '#/components/parameters/ActiveMembership'
-      - $ref: '#/components/parameters/TaskId'
-      - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateRevisionRequest'
-      responses:
-        '201':
-          description: New immutable snapshot; previous approvals are no longer valid
-            for the new version
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TaskSnapshot'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '422':
-          $ref: '#/components/responses/ValidationError'
-        '500':
-          $ref: '#/components/responses/InternalServerError'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '429':
-          $ref: '#/components/responses/RateLimited'
   /tasks/{task_id}/approvals:
     post:
       operationId: decideTaskApproval
@@ -568,8 +532,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: access-token
-      description: Access-token transport only; issuer, format, refresh, rotation
-        and revocation remain OPEN under ADR-017.
+      description: Auth0 RS256 API access token only. Exact configured issuer and audience,
+        exp/iat/nbf and <=900-second lifetime are verified against configured HTTPS JWKS.
+        Never send an ID token or refresh token. Login, refresh and logout are performed by
+        the native OIDC client; they are deliberately not API operations.
   parameters:
     ActiveMembership:
       name: X-Active-Membership-ID
@@ -900,6 +866,7 @@ components:
           exclusiveMinimum: 0
         language:
           type: string
+          default: ar
           pattern: ^[a-z]{2,3}(-[A-Z]{2})?$
         instructions:
           type:
@@ -909,6 +876,7 @@ components:
       required:
       - name
       - question_count
+      - question_types
       x-question-types-status: DEC-033_OPEN_PRODUCT_EDUCATION_SELECTION
     CreateTaskResponse:
       type: object
@@ -1043,8 +1011,11 @@ components:
           - DRAFT_READY
           - VALIDATION_COMPLETED
           - APPROVAL_RECORDED
+          - PUBLISH_PREPARED
           - CANCEL_REQUESTED
           - EXTERNAL_DISPATCHED
+          - EXTERNAL_STEP_SUCCEEDED
+          - EXTERNAL_STEP_FAILED
           - EXTERNAL_OUTCOME_UNKNOWN
           - RECONCILIATION_UPDATED
           - TASK_RECOVERED
@@ -1075,6 +1046,8 @@ components:
       - snapshot_hash
       - destination
       - schema_version
+      - content
+      - quality_report
       properties:
         snapshot_id:
           type: string
@@ -1093,30 +1066,12 @@ components:
             snapshot.
         schema_version:
           type: string
-        quiz_spec:
-          $ref: '#/components/schemas/QuizSpec'
         content:
-          $ref: '#/components/schemas/QuizDraftPreview'
-    CreateRevisionRequest:
-      type: object
-      additionalProperties: false
-      required:
-      - base_snapshot_id
-      - base_snapshot_hash
-      - changes
-      properties:
-        base_snapshot_id:
-          type: string
-          format: uuid
-        base_snapshot_hash:
-          type: string
-          pattern: ^[a-f0-9]{64}$
-        changes:
-          type: array
-          minItems: 1
-          maxItems: 100
-          items:
-            $ref: '#/components/schemas/RevisionOperation'
+          type: object
+          description: Immutable persisted draft including typed questions, source provenance and model metadata.
+        quality_report:
+          type: object
+          description: Immutable quality decision and issue list bound to this snapshot.
     ApprovalRequest:
       type: object
       additionalProperties: false
@@ -1198,23 +1153,38 @@ components:
     TaskResult:
       type: object
       required:
+      - external_object_type
+      - external_object_id
       - verification_status
+      - verified_at
+      - snapshot_hash
+      - course_id
+      - expected_content_match
       properties:
         external_object_type:
           type: string
+          enum: [QUIZ]
         external_object_id:
           type: string
+          minLength: 1
+          maxLength: 512
         external_url:
           type: string
           format: uri
         verification_status:
           type: string
           enum:
-          - PENDING
           - VERIFIED
-          - MISMATCH
-          - NOT_FOUND
-          - UNKNOWN
+        snapshot_hash:
+          type: string
+          pattern: ^[a-f0-9]{64}$
+        course_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        expected_content_match:
+          type: boolean
+          enum: [true]
         verified_at:
           type: string
           format: date-time
@@ -1682,14 +1652,17 @@ components:
       - stem
       - points
       - source_refs
+      - unsupported
       properties:
         question_id:
           type: string
+          format: uuid
         question_type_code:
           type: string
           pattern: ^[A-Z][A-Z0-9_]{1,63}$
         stem:
           type: string
+          minLength: 1
           maxLength: 10000
         options:
           type: array
@@ -1713,6 +1686,15 @@ components:
           items:
             type: string
             format: uuid
+        unsupported:
+          type: boolean
+          description: Explicit model assertion that the supplied course sources do not support this item.
+        unsupported_reason:
+          type:
+          - string
+          - 'null'
+          minLength: 1
+          maxLength: 1000
         difficulty:
           type:
           - string
@@ -1729,66 +1711,29 @@ components:
       - title
       - questions
       - schema_version
+      - total_points
       properties:
         title:
           type: string
+          minLength: 1
+          maxLength: 255
         instructions:
           type:
           - string
           - 'null'
+          maxLength: 4000
         questions:
           type: array
+          minItems: 1
+          maxItems: 100
           items:
             $ref: '#/components/schemas/QuestionDraftPreview'
         schema_version:
           type: string
+          minLength: 1
+          maxLength: 128
         total_points:
           type: number
-          minimum: 0
-    RevisionOperation:
-      type: object
-      additionalProperties: false
-      required:
-      - operation
-      properties:
-        operation:
-          type: string
-          enum:
-          - ADD_QUESTION
-          - UPDATE_QUESTION
-          - REMOVE_QUESTION
-          - UPDATE_QUIZ_SETTINGS
-        question_id:
-          type:
-          - string
-          - 'null'
-        field_code:
-          type:
-          - string
-          - 'null'
-          enum:
-          - STEM
-          - OPTIONS
-          - ANSWER
-          - RATIONALE
-          - POINTS
-          - DIFFICULTY
-          - INSTRUCTIONS
-          - null
-        text_value:
-          type:
-          - string
-          - 'null'
-          maxLength: 10000
-        question_payload_ref:
-          type:
-          - string
-          - 'null'
-          format: uuid
-        position:
-          type:
-          - integer
-          - 'null'
           minimum: 0
   responses:
     Unauthorized:

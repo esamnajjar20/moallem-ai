@@ -9,6 +9,10 @@ class AIExecutionDenied(AIGatewayError):
     code = "AI_EXECUTION_DENIED"
 
 
+class AIProviderNotConfigured(AIGatewayError):
+    code = "AI_PROVIDER_NOT_CONFIGURED"
+
+
 class AIInvocationAlreadyExists(AIGatewayError):
     code = "AI_INVOCATION_ALREADY_EXISTS"
 
@@ -48,3 +52,7 @@ class AIActualCostExceededReservation(AIGatewayError):
 
 class AIReservationSettlementFailed(AIGatewayError):
     code = "AI_RESERVATION_SETTLEMENT_FAILED"
+
+
+class AIUsageAccountingUnknown(AIGatewayError):
+    code = "AI_USAGE_ACCOUNTING_UNKNOWN"

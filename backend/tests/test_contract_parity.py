@@ -51,6 +51,9 @@ def test_task_routes_and_event_types_match_openapi() -> None:
         "/tasks": {"post"},
         "/tasks/{task_id}": {"get"},
         "/tasks/{task_id}/events": {"get"},
+        "/tasks/{task_id}/snapshot": {"get"},
+        "/tasks/{task_id}/approvals": {"post"},
+        "/tasks/{task_id}/result": {"get"},
     }
     for path, methods in expected.items():
         assert path in contract_paths
@@ -58,6 +61,9 @@ def test_task_routes_and_event_types_match_openapi() -> None:
         assert versioned_path in app_paths
         assert methods <= set(contract_paths[path])
         assert methods <= set(app_paths[versioned_path])
+    # A revision request is not exposed until the P6 revision handler and its worker path exist.
+    assert "/tasks/{task_id}/revisions" not in contract_paths
+    assert "/api/v1/tasks/{task_id}/revisions" not in app_paths
 
     task_contract = _schemas()
     assert {event.value for event in TaskEventType} == set(
