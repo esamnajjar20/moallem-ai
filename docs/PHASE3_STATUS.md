@@ -17,11 +17,14 @@ live API docs, teacher account) are BLOCKED; synthetic tests do not establish Mo
 | `routes.py` | MoodleReadService-backed course routes | `GET /courses` and `GET /courses/{course_id}/context` require active membership and call the injected `MoodleReadService`. Without an explicitly supplied service they return 503 `MOODLE_UNAVAILABLE`; no transport, resolver, or service is activated by default. |
 | `errors.py` | contract codes | `MOODLE_CREDENTIAL_INVALID/FUNCTION_NOT_AVAILABLE/PERMISSION_DENIED/UNAVAILABLE`, `CONNECTION_NOT_ACTIVE`. **HTTP statuses (422/422/403/503/409) are my proposal**; the OpenAPI draft names the codes but not their statuses. |
 
-Verification: Python 3.12.16; the full backend suite with PostgreSQL enabled reported **323 passed,
-1 Starlette/httpx deprecation warning**. It includes local TLS tests (SNI/Host/pinned IP/TLS
+Verification: Python 3.12.16; the latest full backend suite with PostgreSQL enabled reported
+**362 passed, 1 Starlette/httpx deprecation warning**. It includes local TLS tests (SNI/Host/pinned IP/TLS
 verification, redirect not followed, size cap and timeout),
 malformed URL and redirect-hop-limit tests, contract-parameter parity tests, and route 503 tests.
 The fixture-replay unit test uses in-memory synthetic data only. No real staging fixture was added.
+GitHub Actions run [#44072361770](https://github.com/esamnajjar20/moallem-ai/actions/runs/44072361770)
+also passed all four jobs on `a02b508a4a52c0a79486eefeea38446871b75194`; this verifies CI, not Moodle
+or the current uncommitted worktree changes.
 
 ## What is still open (needs staging or a decision)
 
@@ -49,5 +52,6 @@ The fixture-replay unit test uses in-memory synthetic data only. No real staging
    evidence from `Validation/Moodle_Staging_Validation_Checklist.md` before calling any read SUPPORTED.
 
 ## Exit gate: NOT MET
-Requires: staging evidence per operation + role, contract tests run against the recorded
-(sanitised) responses, and a green CI run.
+The green CI requirement is met. Remaining requirements: real staging evidence per operation and
+role, contract tests against recorded sanitised staging responses, and validated teacher-only
+course semantics. No Moodle compatibility is claimed.

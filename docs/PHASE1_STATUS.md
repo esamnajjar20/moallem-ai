@@ -1,11 +1,13 @@
 # P1 — Repository Foundation: closure status
 
-**Status: NOT CLOSED.** Locked backend and Flutter checks were executed locally, and the Android
-debug APK build passed with Gradle caches and outputs on temporary storage. No GitHub Actions run
-has demonstrated a green end-to-end gate; iOS still requires the macOS CI runner. The
-`com.moallem` application ID remains provisional and unchanged.
+**Status: TECHNICAL GATE CLOSED WITH EVIDENCE (2026-11-17).** GitHub Actions run
+[#44072361770](https://github.com/esamnajjar20/moallem-ai/actions/runs/44072361770) tested
+`a02b508a4a52c0a79486eefeea38446871b75194`; Backend, Android, unsigned iOS, and Secret Scan all
+passed. The `com.moallem` application ID remains provisional and unchanged. ADR-015/016 governance
+approvals remain separate from this technical gate. The uncommitted worktree changes under review
+are not included in that CI run.
 
-**Assessment date:** 2026-11-16  
+**Assessment date:** 2026-11-17
 **Baseline:** `09_Implementation_Roadmap_v2.0` in Engineering Documentation v2.4  
 **Exit gate:** reproducible Backend + Flutter builds, lint/type-check/test gates, and a green CI run.
 
@@ -14,21 +16,21 @@ has demonstrated a green end-to-end gate; iOS still requires the macOS CI runner
 | ID | Requirement | Current state | Evidence / remaining work |
 |---|---|---|---|
 | P1-01 | API, Worker and Flutter skeleton | IMPLEMENTED / LOCALLY VERIFIED | Python 3.12.16 locked checks pass; Flutter lockfile and Android/iOS runners exist. Flutter 3.50.0 format, analysis, tests, and debug APK build pass. The application ID stays provisional. |
-| P1-02 | CI gates | CONFIGURED / NOT VERIFIED | CI pins actions to immutable commit SHAs and defines Backend, Android, iOS, and Secret Scan jobs. YAML parsed locally; `actionlint` is unavailable. A GitHub run is still required. |
+| P1-02 | CI gates | VERIFIED | CI pins actions to immutable commit SHAs. Run #44072361770 passed Backend, Android, iOS, and Secret Scan on the committed SHA cited above; current uncommitted changes are not covered. |
 | P1-03 | Config, health and readiness | IMPLEMENTED | `config.py` validates configuration fail-fast; `/healthz` and `/readyz` exist; structured JSON logging redacts sensitive values and carries request IDs. API/config/logging tests are included. |
 
 ## Verification evidence
 
 | Check | Result | Qualification |
 |---|---|---|
-| Backend locked checks | **PASS** | `make check` with `uv run --locked`; Python 3.12.16, uv 0.13.8. |
-| Ruff format/check | **PASS** | `make check` ran `ruff check .` and `ruff format --check .`; Ruff 0.17.5. |
-| mypy | **PASS** | `make check`; mypy 1.20.2, 45 source files, no issues. |
-| Backend tests | **PASS** | `make check`: **322 passed, 1 optional PostgreSQL test skipped**. With the temporary PostgreSQL 15.19 test database: **323 passed, 1 Starlette/httpx deprecation warning**. |
-| Backend build/audit | **PASS WITH AUDIT QUALIFICATION** | `make check` built sdist and wheel. `pip-audit` found no known vulnerabilities after updating locked `cryptography` to 50.0.2; it skipped local `moallem 0.0.1` because it is not on PyPI. |
+| Backend locked checks | **PASS** | Local `make check` on 2026-11-17 used `uv run --locked`, Python 3.12.16, uv 0.13.8, and PostgreSQL. |
+| Ruff format/check | **PASS** | Current worktree `make check`: `ruff check .` and `ruff format --check .`; 100 files formatted. |
+| mypy | **PASS** | Current worktree `make check`: **54 source files**, no issues. |
+| Backend tests | **PASS** | Current worktree: **362 passed, 1 warning**, with PostgreSQL migration and integration enabled. CI run #44072361770 passed 323 tests on the earlier committed SHA; it does not cover the current worktree changes. |
+| Backend build/audit | **PASS WITH AUDIT QUALIFICATION** | Local `make check` built sdist and wheel. `pip-audit` found no known vulnerabilities; it skipped local `moallem 0.0.1` because it is not on PyPI. |
 | Flutter pub/format/analyze/tests | **PASS** | Flutter 3.50.0 / Dart 3.14.0; enforced-lockfile pub get succeeded, 6 Dart files unchanged, analyze clean, **3 tests passed**. |
 | Android debug APK | **PASS** | `flutter build apk --debug` succeeded with `GRADLE_USER_HOME=/tmp/moallem-gradle-user-home`; APK: `/tmp/moallem-gradle-project-build/app/outputs/flutter-apk/app-debug.apk` (129,067,034 bytes; ZIP integrity check passed). |
-| GitHub Actions | **NOT RUN** | YAML parses and lists four jobs; `actionlint` is not installed. A PR and green GitHub run are still required. |
+| GitHub Actions | **PASS** | Run #44072361770, SHA `a02b508a4a52c0a79486eefeea38446871b75194`: Backend, Android, unsigned iOS, and Secret Scan all succeeded. Backend applied Alembic migrations and ran PostgreSQL-backed tests. |
 
 ## Toolchain pins added
 
@@ -68,15 +70,12 @@ The default native application ID prefix (`com.moallem`) is provisional. Set
 `MOALLEM_MOBILE_ORG` to the product-owner-approved reverse-DNS prefix before bootstrap if the
 publisher identity has been decided. Do not ship until the identifier is confirmed.
 
-## Remaining P1 technical exit actions
+## Remaining P1 governance notes
 
-1. Run the iOS build on macOS CI.
-2. Open a PR and obtain a successful GitHub Actions run for Backend, Android, iOS, and Secret Scan.
-
-**Do not mark the P1 technical gate CLOSED until all three actions have evidence.** ADR-015 and
-ADR-016 owner approvals remain separate foundation-governance work and must be completed before
-those decisions are treated as final. P2, Moodle integration, durable persistence/queue
-infrastructure, and AI functionality remain outside this P1 closure gate.
+The technical exit gate is closed based on the successful run above. ADR-015 (Flutter state
+management) and ADR-016 (Python type checker) remain provisional governance decisions; do not
+represent them as owner-approved. P2, Moodle integration, durable task execution, and AI
+functionality remain outside this P1 gate.
 
 ## Toolchain and action source references
 

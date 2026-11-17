@@ -23,6 +23,22 @@ def _set_production_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOALLEM_EVENT_CURSOR_HMAC_KEY", base64.b64encode(b"e" * 32).decode())
 
 
+def _set_production_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in {
+        "POLL_SECONDS": "1",
+        "BATCH_SIZE": "16",
+        "LEASE_SECONDS": "60",
+        "LEASE_RENEW_SECONDS": "20",
+        "MAX_ATTEMPTS": "5",
+        "RETRY_BASE_SECONDS": "1",
+        "RETRY_MAX_SECONDS": "300",
+        "SHUTDOWN_GRACE_SECONDS": "30",
+        "IDEMPOTENCY_CLEANUP_INTERVAL_SECONDS": "300",
+        "IDEMPOTENCY_CLEANUP_BATCH_SIZE": "100",
+    }.items():
+        monkeypatch.setenv(f"MOALLEM_TASK_QUEUE_{name}", value)
+
+
 def test_development_needs_no_backing_services() -> None:
     settings = load_settings()
     assert settings.env is Environment.DEVELOPMENT
@@ -32,10 +48,20 @@ def test_development_needs_no_backing_services() -> None:
 def test_production_requires_backing_services(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MOALLEM_ENV", "production")
     _set_production_auth(monkeypatch)
+    _set_production_queue(monkeypatch)
     with pytest.raises(ConfigError) as exc:
         load_settings()
     assert "database_url" in str(exc.value)
-    assert "redis_url" in str(exc.value)
+    assert "redis_url" not in str(exc.value)
+
+
+def test_production_requires_explicit_queue_tuning(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MOALLEM_ENV", "production")
+    _set_production_auth(monkeypatch)
+    monkeypatch.setenv("MOALLEM_DATABASE_URL", "postgresql://db/moallem")
+    with pytest.raises(ConfigError) as exc:
+        load_settings()
+    assert "all task queue settings" in str(exc.value)
 
 
 def test_invalid_values_fail_fast_without_echoing_secrets(monkeypatch: pytest.MonkeyPatch) -> None:

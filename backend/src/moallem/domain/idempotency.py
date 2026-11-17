@@ -7,6 +7,7 @@ inputs with NO defaults: the spec defines no retention value (open with the rete
 
 import hashlib
 import hmac
+import json
 import threading
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -126,6 +127,21 @@ def hash_key(server_key: bytes, client_key: str) -> str:
     if not KEY_MIN_LEN <= len(client_key) <= KEY_MAX_LEN:
         raise IdempotencyKeyInvalid("Idempotency-Key length out of range")
     return hmac.new(server_key, client_key.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def canonical_request_hash(payload: object) -> str:
+    """Hash a JSON-compatible request independent of object key order."""
+    try:
+        canonical = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("request payload must be finite JSON data") from exc
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def begin(

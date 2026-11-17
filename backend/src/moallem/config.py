@@ -58,6 +58,16 @@ class Settings(BaseSettings):
     idempotency_hmac_key: SecretStr | None = None
     idempotency_retention_seconds: int | None = None
     event_cursor_hmac_key: SecretStr | None = None
+    task_queue_poll_seconds: float | None = None
+    task_queue_batch_size: int | None = None
+    task_queue_lease_seconds: int | None = None
+    task_queue_lease_renew_seconds: int | None = None
+    task_queue_max_attempts: int | None = None
+    task_queue_retry_base_seconds: int | None = None
+    task_queue_retry_max_seconds: int | None = None
+    task_queue_shutdown_grace_seconds: int | None = None
+    task_queue_idempotency_cleanup_interval_seconds: int | None = None
+    task_queue_idempotency_cleanup_batch_size: int | None = None
 
     @field_validator("readiness_timeout_seconds")
     @classmethod
@@ -141,13 +151,83 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _p4_queue_settings(self) -> Self:
+        if self.task_queue_poll_seconds is not None and self.task_queue_poll_seconds <= 0:
+            raise ValueError("task_queue_poll_seconds must be positive")
+        if self.task_queue_batch_size is not None and self.task_queue_batch_size < 1:
+            raise ValueError("task_queue_batch_size must be positive")
+        if self.task_queue_lease_seconds is not None and self.task_queue_lease_seconds < 1:
+            raise ValueError("task_queue_lease_seconds must be positive")
+        if (
+            self.task_queue_lease_renew_seconds is not None
+            and self.task_queue_lease_renew_seconds < 1
+        ):
+            raise ValueError("task_queue_lease_renew_seconds must be positive")
+        if (
+            self.task_queue_lease_renew_seconds is not None
+            and self.task_queue_lease_seconds is not None
+            and self.task_queue_lease_renew_seconds >= self.task_queue_lease_seconds
+        ):
+            raise ValueError("task_queue_lease_renew_seconds must be less than the lease")
+        if (
+            self.task_queue_shutdown_grace_seconds is not None
+            and self.task_queue_shutdown_grace_seconds < 0
+        ):
+            raise ValueError("task_queue_shutdown_grace_seconds must not be negative")
+        if (
+            self.task_queue_idempotency_cleanup_interval_seconds is not None
+            and self.task_queue_idempotency_cleanup_interval_seconds < 1
+        ):
+            raise ValueError("task_queue_idempotency_cleanup_interval_seconds must be positive")
+        if (
+            self.task_queue_idempotency_cleanup_batch_size is not None
+            and self.task_queue_idempotency_cleanup_batch_size < 1
+        ):
+            raise ValueError("task_queue_idempotency_cleanup_batch_size must be positive")
+        queue_values = (
+            self.task_queue_poll_seconds,
+            self.task_queue_batch_size,
+            self.task_queue_lease_seconds,
+            self.task_queue_lease_renew_seconds,
+            self.task_queue_shutdown_grace_seconds,
+            self.task_queue_max_attempts,
+            self.task_queue_retry_base_seconds,
+            self.task_queue_retry_max_seconds,
+            self.task_queue_idempotency_cleanup_interval_seconds,
+            self.task_queue_idempotency_cleanup_batch_size,
+        )
+        retry_values = (
+            self.task_queue_max_attempts,
+            self.task_queue_retry_base_seconds,
+            self.task_queue_retry_max_seconds,
+        )
+        if any(value is not None for value in retry_values) and not all(
+            value is not None for value in retry_values
+        ):
+            raise ValueError("all task queue retry settings must be set together")
+        if all(value is not None for value in retry_values):
+            assert self.task_queue_max_attempts is not None  # noqa: S101
+            assert self.task_queue_retry_base_seconds is not None  # noqa: S101
+            assert self.task_queue_retry_max_seconds is not None  # noqa: S101
+            if self.task_queue_max_attempts < 1:
+                raise ValueError("task_queue_max_attempts must be positive")
+            if self.task_queue_retry_base_seconds < 1:
+                raise ValueError("task_queue_retry_base_seconds must be positive")
+            if self.task_queue_retry_max_seconds < self.task_queue_retry_base_seconds:
+                raise ValueError("task_queue_retry_max_seconds must be >= retry base")
+        if self.env in (Environment.STAGING, Environment.PRODUCTION) and any(
+            value is None for value in queue_values
+        ):
+            raise ValueError("all task queue settings are required outside dev/test")
+        return self
+
+    @model_validator(mode="after")
     def _require_backing_services_outside_dev(self) -> Self:
         if self.env in (Environment.STAGING, Environment.PRODUCTION):
             missing = [
                 name
                 for name, value in (
                     ("database_url", self.database_url),
-                    ("redis_url", self.redis_url),
                     ("idempotency_hmac_key", self.idempotency_hmac_key),
                     ("idempotency_retention_seconds", self.idempotency_retention_seconds),
                 )
@@ -157,7 +237,7 @@ class Settings(BaseSettings):
                 raise ValueError(f"required in {self.env.value}: {', '.join(missing)}")
         return self
 
-    def safe_summary(self) -> dict[str, str | float | bool]:
+    def safe_summary(self) -> dict[str, str | int | float | bool | None]:
         """Loggable view: no secret values, only whether they are set."""
         return {
             "env": self.env.value,
@@ -169,6 +249,18 @@ class Settings(BaseSettings):
             "secret_encryption_key_set": self.secret_encryption_key is not None,
             "idempotency_configured": self.idempotency_hmac_key is not None,
             "event_cursor_configured": self.event_cursor_hmac_key is not None,
+            "task_queue_poll_seconds": self.task_queue_poll_seconds,
+            "task_queue_batch_size": self.task_queue_batch_size,
+            "task_queue_lease_seconds": self.task_queue_lease_seconds,
+            "task_queue_lease_renew_seconds": self.task_queue_lease_renew_seconds,
+            "task_queue_max_attempts_set": self.task_queue_max_attempts is not None,
+            "task_queue_shutdown_grace_seconds": self.task_queue_shutdown_grace_seconds,
+            "task_queue_idempotency_cleanup_interval_seconds": (
+                self.task_queue_idempotency_cleanup_interval_seconds
+            ),
+            "task_queue_idempotency_cleanup_batch_size": (
+                self.task_queue_idempotency_cleanup_batch_size
+            ),
         }
 
 

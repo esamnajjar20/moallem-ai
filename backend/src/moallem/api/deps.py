@@ -93,7 +93,7 @@ def get_membership_repo(request: Request) -> MembershipRepository:
 def get_active_context(
     user_id: Annotated[str, Depends(get_user_id)],
     repo: Annotated[MembershipRepository, Depends(get_membership_repo)],
-    x_active_membership_id: Annotated[str | None, Header()] = None,
+    x_active_membership_id: Annotated[str | None, Header(alias="X-Active-Membership-ID")] = None,
 ) -> ActiveContext:
     return resolve_active_context(
         authenticated_user_id=user_id, header_value=x_active_membership_id, repo=repo

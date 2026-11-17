@@ -1,68 +1,76 @@
-# P4 — PostgreSQL persistence and Moodle API routes
+# P4 — PostgreSQL persistence, queue, Inbox, and recovery
 
-**Status: LOCALLY VERIFIED, NOT CLOSED.** The owner approved PostgreSQL and AES-256-GCM. Models,
-an initial Alembic migration, repository adapters, and explicit `MoodleReadService` route injection
-are implemented. Local integration tests pass against a temporary PostgreSQL 15.19 instance.
-Production deployment, operational key custody, isolation review, and Moodle staging evidence
-remain outstanding.
+**Status: PARTIAL, NOT CLOSED.** PostgreSQL `FOR UPDATE SKIP LOCKED` is the approved MVP queue.
+Task persistence, the Outbox worker, Inbox processing, and protected dead-letter recovery are
+implemented and locally verified against PostgreSQL. There are no production task handlers, no
+configured administrative authorization, and no CI result for this worktree.
 
 ## Implemented
 
-- SQLAlchemy models cover users, tenants, memberships, encrypted secret references, Moodle
-  connections, and the task/idempotency/event/outbox/inbox tables in the P4 planning scope.
-- Alembic migration creates and drops the schema. `alembic/env.py` requires
-  `MOALLEM_DATABASE_URL`; credentials are not embedded in migration files.
-- PostgreSQL adapters implement membership lookup, pre-provisioned Auth0 subject mapping, and
-  tenant-filtered Moodle connection CRUD. A PostgreSQL development vault encrypts tokens with
-  AES-256-GCM and uses tenant/reference associated data.
-- `GET /courses` and `GET /courses/{course_id}/context` require
-  `X-Active-Membership-ID` and invoke the injected `MoodleReadService`. A missing service returns
-  503; no Moodle network transport, resolver, or service is enabled automatically.
-- HTTP tests cover route contract parameters, fail-closed behavior, and a synthetic successful
-  read through `MoodleReadService` and fake transport. `source_refs` is currently empty.
+- SQLAlchemy models and migrations cover tenant-scoped tasks, events, idempotency, Outbox, Inbox,
+  and task-recovery lineage. The current Alembic revision is `8c3f1a4d2b90`.
+- `PostgresTaskRepository.create_idempotent` persists the idempotency record, task, initial event,
+  and Outbox row in one transaction. Rollback, duplicate requests, and concurrent creation are
+  tested. PostgreSQL composite foreign keys prevent cross-tenant Moodle connections and task
+  recovery parents; a unique parent-recovery constraint prevents concurrent duplicate retries.
+- The task API provides `POST /tasks`, `GET /tasks/{task_id}`, and
+  `GET /tasks/{task_id}/events`. Access is membership/tenant scoped and permissions remain
+  fail-closed under `DenyAllPolicy` unless an explicit policy is injected.
+- `PostgresOutboxRepository` implements `FOR UPDATE SKIP LOCKED`, expiring leases, fencing
+  generations, renewal, ACK, bounded retry, and Dead Letter transitions. Worker task-state changes
+  and their event records are transactional. Claims are filtered to registered handler types;
+  unsupported or malformed task types are reported and not claimed. With no registered handlers,
+  the worker idles and logs its status rather than consuming work.
+- `PostgresInboxConsumer` deduplicates on `(tenant_id, consumer, message_id)`, stores a canonical
+  payload hash, and uses receipt leases/generations. A handler's database changes and the
+  `PROCESSED` receipt commit together; the source adapter must ACK only when the returned result
+  permits it. Retryable failures remain unacknowledged, while permanent/exhausted failures are
+  recorded and acknowledged. External effects must be emitted through an Outbox.
+- `TaskRecoveryService` lists and recovers Dead Letters but exposes no API endpoint. Its default
+  policy is `DenyAllPolicy`; tests use an explicit allow-list. Recovery preserves the failed task,
+  writes the requesting actor and reason to a new event, creates an idempotent linked task, and
+  refuses recovery when dispatch/history indicates a possible external effect. The failed task's
+  prior events and error remain intact.
+- Worker retry behavior includes exponential backoff and jitter, max attempts, lease renewal,
+  fencing, and graceful shutdown. Bounded idempotency cleanup excludes unresolved operations.
 
 ## Verification evidence
 
 | Check | Result |
 |---|---|
 | Python | Python 3.12.16 (`backend/.python-version`) |
-| Ruff check and format | PASS |
-| mypy | PASS; 45 source files |
-| Targeted routes/config/encryption tests | PASS; 18 passed |
-| PostgreSQL repository integration | PASS; 1 passed against local PostgreSQL 15.19 using synthetic records |
-| Alembic lifecycle | PASS; downgrade to base, upgrade to head, then `alembic check` reported no pending operations |
-| Full `make check` | PASS; Ruff, formatting, mypy (45 files), pytest (**322 passed, 1 optional DB test skipped**), `uv build`, and `pip-audit` |
-| Test suite with PostgreSQL enabled | PASS; **323 passed**, 1 Starlette/httpx deprecation warning |
-| Dependency audit | PASS; no known vulnerabilities in audited dependencies; unpublished local package is not on PyPI |
-| GitHub Actions PostgreSQL service | Configured in `.github/workflows/ci.yml`; applies Alembic migrations before tests and sets `MOALLEM_TEST_DATABASE_URL`. Local PostgreSQL-backed run: **323 passed**; remote GitHub Actions run not yet observed. |
-| Moodle staging interoperability | **BLOCKED**; no Moodle staging URL/account or real sanitized fixtures |
+| `make check` | **PASS**: Ruff check/format, mypy (54 source files), **362 passed**, `uv build`, and `pip-audit` |
+| PostgreSQL integration | **PASS**: all **33** tests in `tests/persistence/test_postgres_repositories.py`, including Inbox dedup/rollback/retry/lease expiry/concurrency/tenant scope, handler filtering, dead-letter recovery authorization and concurrency, downgrade guards, and a task lifecycle through success, retry, crash recovery, idempotent replay, and administrative recovery |
+| Alembic | **PASS**: one head, `8c3f1a4d2b90`; `alembic check` reports “No new upgrade operations detected” |
+| Migration compatibility | **PASS**: downgrade/re-upgrade exercised by PostgreSQL tests; legacy Inbox `COMPLETED` data survives a round trip as `PROCESSED`; orphan records and unsafe downgrade data are rejected without deleting data |
+| Dependency audit | **PASS WITH QUALIFICATION**: no known vulnerabilities; the unpublished local `moallem 0.0.1` package cannot be audited on PyPI |
+| Secret scan | Common hard-coded token/private-key patterns were scanned locally with no matches. Gitleaks was unavailable locally; the prior green CI Secret Scan does not cover this worktree |
+| Warning | One Starlette deprecation warning: `starlette.testclient` currently uses `httpx`; test results are unaffected |
+| GitHub Actions | **NOT RUN for this worktree**; earlier green CI applies only to its committed SHA |
+| Moodle / external effects | **NOT RUN**; no Moodle write or AI handler was added |
 
-Integration test instructions (after provisioning a disposable PostgreSQL test database and
-applying the migration):
+The local PostgreSQL integration run used a disposable PostgreSQL 15 Alpine container, synthetic
+identities and connection data, and no live Moodle credentials. It is not evidence of production
+deployment, operational capacity, or Moodle compatibility.
 
-```bash
-cd backend
-export MOALLEM_DATABASE_URL='postgresql+psycopg://…'
-export MOALLEM_TEST_DATABASE_URL="$MOALLEM_DATABASE_URL"
-uv run --locked alembic upgrade head
-uv run --locked pytest -q tests/persistence/test_postgres_repositories.py
-```
+## Remaining work, blockers, and risks
 
-The test inserts synthetic identities and a synthetic Moodle token, verifies that the database
-stores ciphertext rather than the token, tests tenant-scoped connection lookups, and removes its
-records. Never use production credentials or data for this test.
+- No production task handler is registered. The worker's registry and lifecycle were exercised with
+  synthetic test handlers only; no Moodle, AI, approval, or publishing operation is implemented.
+- Inbox receipt processing is a persistence/consumer primitive; no external broker or source adapter
+  is connected. The adapter must implement ACK/redelivery according to `InboxResult`.
+- Administrative recovery has no API endpoint and remains inaccessible by default. Product/Security
+  owners must approve the role/action matrix before any production policy is injected; do not bypass
+  `DenyAllPolicy`.
+- The no-external-effect check relies on persisted dispatch flags and task history. Any future
+  handler must durably record dispatch before making an external write and use Outbox for external
+  effects; this invariant has not been exercised against a real integration.
+- Queue throughput, lock contention, failover, backup/restore, production key custody, and the
+  1,000–10,000 teacher target are not benchmarked or proven. No production deployment is claimed.
+- Secret Manager/KMS, hosting, operational monitoring, and database isolation/RLS decisions remain
+  open. Moodle staging credentials, a teacher account, and real sanitized fixtures remain blocked
+  on the Moodle administrator.
+- The worktree remains local and uncommitted. Do not treat the older green CI run as verification of
+  these changes.
 
-## Remaining blockers and risks
-
-- Auth0 issuer/audience and session lifecycle, the final permission matrix (`DenyAllPolicy`
-  remains the default), tenant isolation/RLS review, broker/Redis, and production KMS/Secret Manager
-  remain unresolved or unimplemented.
-- The app requires explicit safe construction/injection of `MoodleReadService`; the default
-  `create_app()` deliberately leaves it unset. No live Moodle request has been made.
-- The route paths remain at the root as currently implemented; compare deployment base-path
-  routing with the OpenAPI draft before claiming full contract parity. The contract was not changed.
-- Moodle teacher-only course semantics, real error behavior, and course/content field compatibility
-  remain unverified until Moodle Admin provides staging access.
-
-**Do not mark P4 or the Moodle validation gate CLOSED** based on these local PostgreSQL and synthetic
-HTTP tests.
+**Do not mark P4 or the Moodle validation gate CLOSED.**

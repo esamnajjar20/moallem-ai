@@ -1,9 +1,8 @@
 """Transactional outbox + inbox dedup rules (P4-03; Reliability Addendum v2.4 §2, §5).
 
-Provider-independent semantics only. The concrete broker (DEC-030), retry ceilings and backoff
-values are OPEN: ``max_attempts`` and ``retry_after`` are required arguments with no defaults.
-Fencing: every claim bumps ``lease_generation``; a worker may commit only while its token is
-current.
+Provider-independent semantics. PostgreSQL ``SKIP LOCKED`` is approved for the MVP (DEC-030);
+retry ceilings and backoff values remain explicit caller inputs. Fencing: every claim bumps
+``lease_generation``; a worker may commit only while its token is current.
 """
 
 from dataclasses import dataclass, replace
@@ -105,7 +104,9 @@ def release_failed(
 
 class InboxState(StrEnum):
     RECEIVED = "RECEIVED"
-    COMPLETED = "COMPLETED"
+    PROCESSING = "PROCESSING"
+    PROCESSED = "PROCESSED"
+    FAILED = "FAILED"
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,6 @@ class InMemoryInbox:
         key = (consumer, message_id)
         if key not in self._rows:
             raise TaskStateConflict("message was never received")
-        if self._rows[key][0] is InboxState.COMPLETED:
+        if self._rows[key][0] is InboxState.PROCESSED:
             raise TaskStateConflict("message already completed")
-        self._rows[key] = (InboxState.COMPLETED, result_ref)
+        self._rows[key] = (InboxState.PROCESSED, result_ref)

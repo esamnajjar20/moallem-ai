@@ -101,6 +101,16 @@ def test_docs_disabled_in_production() -> None:
         idempotency_hmac_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
         idempotency_retention_seconds=86400,
         event_cursor_hmac_key="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        task_queue_poll_seconds=1,
+        task_queue_batch_size=16,
+        task_queue_lease_seconds=60,
+        task_queue_lease_renew_seconds=20,
+        task_queue_max_attempts=5,
+        task_queue_retry_base_seconds=1,
+        task_queue_retry_max_seconds=300,
+        task_queue_shutdown_grace_seconds=30,
+        task_queue_idempotency_cleanup_interval_seconds=300,
+        task_queue_idempotency_cleanup_batch_size=100,
         _env_file=None,
     )
     client = TestClient(create_app(s, checks=[]))

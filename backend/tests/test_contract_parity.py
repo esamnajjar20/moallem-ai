@@ -35,3 +35,36 @@ def test_membership_status_matches_openapi_enum() -> None:
 
     enum = _schemas()["MembershipSummary"]["properties"]["status"]["enum"]
     assert {s.value for s in MembershipStatus} == set(enum)
+
+
+def test_task_routes_and_event_types_match_openapi() -> None:
+    from moallem.api.app import create_app
+    from moallem.api.task_schemas import TaskEventType
+    from moallem.config import Environment, Settings
+
+    spec = yaml.safe_load(OPENAPI.read_text(encoding="utf-8"))
+    contract_paths = spec["paths"]
+    app_paths = create_app(Settings(env=Environment.TEST, _env_file=None), checks=[]).openapi()[
+        "paths"
+    ]
+    expected = {
+        "/tasks": {"post"},
+        "/tasks/{task_id}": {"get"},
+        "/tasks/{task_id}/events": {"get"},
+    }
+    for path, methods in expected.items():
+        assert path in contract_paths
+        assert path in app_paths
+        assert methods <= set(contract_paths[path])
+        assert methods <= set(app_paths[path])
+
+    task_contract = _schemas()
+    assert {event.value for event in TaskEventType} == set(
+        task_contract["TaskEvent"]["properties"]["event_type"]["enum"]
+    )
+    post_parameters = {
+        parameter["name"]: parameter for parameter in app_paths["/tasks"]["post"]["parameters"]
+    }
+    assert post_parameters["Idempotency-Key"]["required"] is True
+    assert post_parameters["X-Active-Membership-ID"]["required"] is True
+    assert "202" in app_paths["/tasks"]["post"]["responses"]

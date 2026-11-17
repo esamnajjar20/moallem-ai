@@ -4,14 +4,18 @@ Planning baseline: Moallem AI Engineering Documentation v2.4.
 
 ## Current implementation status
 
-- Backend: locked Python 3.12.16 checks pass; `make check` reports 322 passed and one optional
-  PostgreSQL test skipped. With the temporary PostgreSQL 15.19 test database, all 323 tests pass.
+- Backend: locked Python 3.12.16 `make check` passes on the current worktree: Ruff, mypy (54 source
+  files), **362 tests with PostgreSQL enabled**, package build, and dependency audit (one
+  Starlette/httpx deprecation warning; the unpublished local package cannot be audited on PyPI).
 - Mobile foundation: Flutter shell exists; toolchain is now pinned to Flutter 3.50.0 / Dart 3.14.0.
-- **P1 is not yet closed:** Flutter 3.50.0 format, analysis, tests, and Android debug APK build pass locally; a green GitHub Actions run is still required for closure.
+- **P1 technical gate passed on the committed baseline:** GitHub Actions run
+  [#44072361770](https://github.com/esamnajjar20/moallem-ai/actions/runs/44072361770) succeeded on
+  main for Backend, Android, unsigned iOS, and Secret Scan. See `docs/PHASE1_STATUS.md`; ADR-015
+  and ADR-016 remain provisional.
 - **P3 read adapter:** code and synthetic-fixture tests exist (`backend/src/moallem/moodle/`); it is unverified against a real Moodle. See `docs/PHASE3_STATUS.md`.
-- **P4 persistence:** PostgreSQL models, Alembic migration, tenant-scoped repositories, and Moodle route injection are locally verified; production key custody and Moodle staging remain blocked. See `docs/PHASE4_STATUS.md`.
+- **P4 persistence and queue:** PostgreSQL task/idempotency/event/outbox writes, tenant-scoped Inbox consumer, fail-closed dead-letter recovery service, worker leases/retries, and migrations are locally verified. No production task handler or admin recovery API is configured; `DenyAllPolicy` remains the default. These worktree changes are not in the green CI commit; production key custody and operations remain incomplete. See `docs/PHASE4_STATUS.md`.
 - ADR-015 (Riverpod) and ADR-016 (mypy) remain provisional pending owner sign-off.
-- P2/P4 domain primitives are not a substitute for the later persistence, identity, Moodle, or queue integrations.
+- P2 remains partial; the Moodle adapter has no live staging verification. The worker starts without handlers only in an idle, fail-closed mode and logs unsupported task types without claiming them.
 
 ## Repository layout
 

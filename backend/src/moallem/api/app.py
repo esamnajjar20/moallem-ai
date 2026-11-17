@@ -28,7 +28,9 @@ from moallem.api.health import router as health_router
 from moallem.api.jwks import UrlJwks, jwks_url_for_issuer
 from moallem.api.me import router as me_router
 from moallem.api.schemas import ErrorDetails, ErrorEnvelope, FieldError
+from moallem.api.tasks import router as task_router
 from moallem.config import Environment, Settings, load_settings
+from moallem.domain.authorization import DenyAllPolicy, PermissionPolicy
 from moallem.domain.errors import DomainError
 from moallem.domain.identity import DerivedSubjectMapper
 from moallem.domain.membership import InMemoryMembershipRepository, MembershipRepository
@@ -44,6 +46,7 @@ from moallem.persistence.repositories import (
     PostgresSubjectMapper,
     new_postgres_connection_repository,
 )
+from moallem.persistence.task_repository import PostgresTaskRepository
 
 log = logging.getLogger("moallem.api")
 
@@ -121,6 +124,7 @@ def create_app(
     authenticator: Authenticator | None = None,
     membership_repo: MembershipRepository | None = None,
     moodle_read_service: MoodleReadService | None = None,
+    permission_policy: PermissionPolicy | None = None,
 ) -> FastAPI:
     settings = settings or load_settings()
     configure_logging(settings.log_level.value, service="moallem-api", env=settings.env.value)
@@ -215,6 +219,10 @@ def create_app(
         new_postgres_connection_repository(db_sessions) if db_sessions is not None else None
     )
     app.state.moodle_read_service = moodle_read_service
+    app.state.permission_policy = permission_policy or DenyAllPolicy()
+    app.state.task_repository = (
+        PostgresTaskRepository(db_sessions) if db_sessions is not None else None
+    )
     app.state.readiness_checks = list(checks)
     app.state.readiness_timeout = settings.readiness_timeout_seconds
 
@@ -243,4 +251,5 @@ def create_app(
     app.include_router(health_router)
     app.include_router(me_router)
     app.include_router(moodle_router)
+    app.include_router(task_router)
     return app

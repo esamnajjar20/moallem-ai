@@ -25,9 +25,22 @@ def _b64d(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def encode_cursor(*, key: bytes, tenant_id: str, task_id: str, last_sequence: int) -> str:
+def encode_cursor(
+    *,
+    key: bytes,
+    tenant_id: str,
+    task_id: str,
+    last_sequence: int,
+    actor_membership_id: str | None = None,
+) -> str:
     body = json.dumps(
-        {"v": CURSOR_VERSION, "t": tenant_id, "k": task_id, "s": last_sequence},
+        {
+            "v": CURSOR_VERSION,
+            "t": tenant_id,
+            "m": actor_membership_id,
+            "k": task_id,
+            "s": last_sequence,
+        },
         separators=(",", ":"),
         sort_keys=True,
     ).encode()
@@ -35,7 +48,14 @@ def encode_cursor(*, key: bytes, tenant_id: str, task_id: str, last_sequence: in
     return f"{_b64e(body)}.{_b64e(mac)}"
 
 
-def decode_cursor(cursor: str, *, key: bytes, tenant_id: str, task_id: str) -> int:
+def decode_cursor(
+    cursor: str,
+    *,
+    key: bytes,
+    tenant_id: str,
+    task_id: str,
+    actor_membership_id: str | None = None,
+) -> int:
     try:
         body_s, mac_s = cursor.split(".")
         body, mac = _b64d(body_s), _b64d(mac_s)
@@ -48,6 +68,7 @@ def decode_cursor(cursor: str, *, key: bytes, tenant_id: str, task_id: str) -> i
     if (
         data.get("v") != CURSOR_VERSION
         or data.get("t") != tenant_id
+        or data.get("m") != actor_membership_id
         or data.get("k") != task_id
         or not isinstance(seq, int)
         or isinstance(seq, bool)
