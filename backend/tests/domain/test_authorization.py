@@ -1,12 +1,12 @@
 import pytest
 
 from moallem.domain.authorization import (
-    ROLE_ADMIN,
-    ROLE_TEACHER,
     PERM_MOODLE_COURSE_READ,
     PERM_QUIZ_APPROVE,
     PERM_QUIZ_GENERATE_REQUEST,
     PERM_TASK_READ,
+    ROLE_ADMIN,
+    ROLE_TEACHER,
     DenyAllPolicy,
     StaticPolicy,
     TeacherMVPPolicy,

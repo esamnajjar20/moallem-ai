@@ -1,157 +1,216 @@
 """CREATE_QUIZ publish handler (Phase B) — Vertical Slice final step.
 
-Orchestrates:
-  APPROVED task → publish intent → preflight → Moodle write → verify → ledger
+Flow (every external effect is recorded in the P7 publish ledger):
 
-This handler is intentionally conservative:
-- No Moodle network call happens unless MoodleWriteService is injected with a real adapter.
-- Default path uses DenyAllWriteAdapter and fails closed.
-- Full wiring to PostgresPublicationRepository methods is documented and partially invoked;
-  remaining ledger calls follow the repository's existing P7 API.
+  APPROVED task
+    -> publish intent (idempotent)            create_publish_intent_for_worker
+    -> plan the single CREATE_QUIZ step       plan_external_step
+    -> dispatch (preflight + EXECUTING)       mark_step_dispatched
+    -> Moodle create                          MoodleWriteService.create_approved_quiz
+    -> outcome in the ledger                  record_step_outcome
+    -> VERIFYING                              begin_verification
+    -> Moodle read-back                       MoodleWriteService.verify_created_quiz
+    -> COMPLETED only if the read-back matches   complete_verified_publish
 
-Task type: CREATE_QUIZ
-Expected status on entry: APPROVED (worker may also pick EXECUTING after intent prep)
+The repository performs the task status transitions for every step above; the handler only
+transitions to NEEDS_RECONCILIATION when verification fails.
+
+An ambiguous create (timeout, partial write, unexpected error) is recorded as UNKNOWN and is
+NEVER retried automatically: only reconciliation may prove the quiz is absent.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, Protocol
+from typing import Protocol
 
-from moallem.domain.membership import ActiveContext
-from moallem.domain.publishing import (
-    PublishIntent,
-    PublishState,
-    SnapshotDescriptor,
+from moallem.domain.canonical import canonical_hash
+from moallem.domain.errors import (
+    DomainError,
+    MembershipContextInvalid,
+    PermissionDenied,
+    ResourceNotFound,
+    TaskStateConflict,
 )
+from moallem.domain.membership import ActiveContext
+from moallem.domain.publishing import PublishIntent, SnapshotDescriptor
 from moallem.domain.tasks import TaskStatus
+from moallem.moodle.errors import (
+    ConnectionNotActive,
+    MoodleCredentialInvalid,
+    MoodleFunctionNotAvailable,
+    MoodlePermissionDenied,
+)
 from moallem.moodle.question_mapping import (
     UnsupportedQuestionForPublish,
     map_quiz_draft_to_specs,
 )
-from moallem.moodle.write_service import MoodleWriteService, PublishQuizOutcome
+from moallem.moodle.write_service import MoodleWriteService
+from moallem.persistence.publishing_repository import PublishIntentRecord, SnapshotRecord
+from moallem.persistence.task_repository import PersistedTask
+from moallem.worker.draft_loader import draft_from_snapshot_content
 from moallem.worker.queue import PermanentTaskError, RetryableTaskError, TaskExecutionContext
 
 log = logging.getLogger("moallem.worker.publish_quiz")
 
 TASK_TYPE_CREATE_QUIZ = "CREATE_QUIZ"
+STEP_KIND = "CREATE_QUIZ"
+
+# Failures raised before any byte can have reached Moodle, or that Moodle rejected outright.
+_DEFINITE_FAILURES: tuple[type[Exception], ...] = (
+    PermissionDenied,
+    ResourceNotFound,
+    TaskStateConflict,
+    ConnectionNotActive,
+    MoodleCredentialInvalid,
+    MoodleFunctionNotAvailable,
+    MoodlePermissionDenied,
+)
 
 
 class PublicationGateway(Protocol):
-    """Minimal surface the handler needs from PostgresPublicationRepository."""
+    """Surface the handler needs from PostgresPublicationRepository."""
 
     def create_publish_intent_for_worker(
         self, *, tenant_id: str, task_id: str
-    ) -> Any: ...
+    ) -> PublishIntentRecord: ...
 
-    def get_current_snapshot(self, ctx: ActiveContext, task_id: str) -> Any: ...
+    def get_current_snapshot(self, ctx: ActiveContext, task_id: str) -> SnapshotRecord: ...
+
+    def plan_external_step(
+        self,
+        *,
+        tenant_id: str,
+        publish_intent_id: str,
+        step_kind: str,
+        ordinal: int,
+        request: dict[str, object],
+    ) -> str: ...
+
+    def mark_step_dispatched(
+        self, *, tenant_id: str, task_id: str, publish_intent_id: str, step_key: str
+    ) -> int: ...
+
+    def record_step_outcome(
+        self,
+        *,
+        tenant_id: str,
+        task_id: str,
+        publish_intent_id: str,
+        step_key: str,
+        outcome: str,
+        response_hash: str | None = None,
+        external_ref: str | None = None,
+    ) -> object: ...
+
+    def begin_verification(
+        self, *, tenant_id: str, task_id: str, publish_intent_id: str
+    ) -> None: ...
+
+    def complete_verified_publish(
+        self,
+        *,
+        tenant_id: str,
+        task_id: str,
+        publish_intent_id: str,
+        snapshot_hash_value: str,
+        verification: dict[str, object],
+    ) -> None: ...
 
 
-class DraftLoader(Protocol):
-    """Load the approved QuizDraftPreview for a task/snapshot."""
-
-    def load_draft(self, *, tenant_id: str, task_id: str, snapshot_id: str) -> Any: ...
+class ActorResolver(Protocol):
+    def resolve(self, tenant_id: str, membership_id: str) -> ActiveContext: ...
 
 
 class PublishQuizHandler:
-    """Worker handler that publishes an approved quiz draft to Moodle.
-
-    Dependencies are injected so tests can use FakeWriteAdapter and in-memory gateways.
-    """
+    """Worker handler that publishes an approved quiz draft to Moodle."""
 
     def __init__(
         self,
         *,
         write_service: MoodleWriteService,
-        publications: PublicationGateway | None = None,
-        draft_loader: DraftLoader | None = None,
-        # Optional: supply a pre-built ActiveContext resolver for the task owner
-        context_resolver: Any | None = None,
+        publications: PublicationGateway,
+        actors: ActorResolver,
     ) -> None:
         self._write = write_service
-        self._publications = publications
-        self._draft_loader = draft_loader
-        self._context_resolver = context_resolver
+        self._pubs = publications
+        self._actors = actors
 
-    async def execute(self, task: Any, context: TaskExecutionContext) -> None:
-        """Entry point required by TaskHandler protocol.
+    async def execute(self, task: PersistedTask, context: TaskExecutionContext) -> None:
+        if task.task_type != TASK_TYPE_CREATE_QUIZ:
+            raise PermanentTaskError("UNSUPPORTED_TASK_TYPE")
+        if task.status is not TaskStatus.APPROVED:
+            # Any other state already has (or may have) a ledger entry: never re-run blindly.
+            raise PermanentTaskError("TASK_NOT_READY_FOR_PUBLISH")
 
-        `task` is a PersistedTask (or compatible) with at least:
-          - id, tenant_id, task_type, status
-        """
-        task_type = getattr(task, "task_type", None) or getattr(task, "type", None)
-        if task_type != TASK_TYPE_CREATE_QUIZ:
-            raise PermanentTaskError("unsupported_task_type")
+        tenant_id, task_id = task.tenant_id, task.task_id
+        actor = await self._resolve_actor(tenant_id, task.actor_membership_id)
 
-        status = getattr(task, "status", None)
-        if status not in {
-            TaskStatus.APPROVED.value if hasattr(TaskStatus.APPROVED, "value") else "APPROVED",
-            TaskStatus.EXECUTING.value if hasattr(TaskStatus.EXECUTING, "value") else "EXECUTING",
-            "APPROVED",
-            "EXECUTING",
-        }:
-            raise PermanentTaskError("task_not_ready_for_publish")
-
-        tenant_id = str(task.tenant_id)
-        task_id = str(task.id)
-
-        log.info(
-            "publish_quiz.start",
-            extra={"tenant_id": tenant_id, "task_id": task_id, "status": status},
-        )
-
-        # --- 1. Ensure publish intent exists (idempotent) ---
-        if self._publications is not None:
-            intent_record = self._publications.create_publish_intent_for_worker(
-                tenant_id=tenant_id, task_id=task_id
-            )
-            external_operation_key = getattr(
-                intent_record, "external_operation_key", None
-            ) or getattr(intent_record, "operation_key", "")
-            snapshot_id = str(
-                getattr(intent_record, "snapshot_id", "")
-                or getattr(intent_record, "snapshotId", "")
-            )
-        else:
-            # Test / partial wiring path
-            external_operation_key = f"test-op-{task_id}"
-            snapshot_id = ""
-            intent_record = None
-
-        # --- 2. Load snapshot descriptor ---
-        snapshot = self._resolve_snapshot(tenant_id, task_id, snapshot_id, task)
-
-        # --- 3. Load draft and map questions ---
         try:
-            quiz_name, quiz_intro, specs = self._load_and_map(tenant_id, task_id, snapshot)
-        except UnsupportedQuestionForPublish as exc:
-            log.warning("publish_quiz.unsupported_questions", extra={"error": str(exc)})
-            raise PermanentTaskError("unsupported_questions") from exc
+            intent_record = await asyncio.to_thread(
+                self._pubs.create_publish_intent_for_worker,
+                tenant_id=tenant_id,
+                task_id=task_id,
+            )
+            record = await asyncio.to_thread(self._pubs.get_current_snapshot, actor, task_id)
+        except (TaskStateConflict, ResourceNotFound) as exc:
+            raise PermanentTaskError("APPROVAL_NOT_USABLE") from exc
 
-        # --- 4. Build PublishIntent domain object for the write service ---
-        intent = PublishIntent(
-            publish_intent_id=str(getattr(intent_record, "id", task_id)),
-            task_id=task_id,
+        snapshot = _descriptor(record)
+        if (
+            snapshot.snapshot_id != intent_record.snapshot_id
+            or snapshot.snapshot_hash != intent_record.snapshot_hash
+        ):
+            raise PermanentTaskError("SNAPSHOT_CHANGED")
+
+        try:
+            quiz_name, quiz_intro, specs = map_quiz_draft_to_specs(
+                draft_from_snapshot_content(record.content)
+            )
+            intent = PublishIntent(
+                publish_intent_id=intent_record.publish_intent_id,
+                task_id=task_id,
+                tenant_id=tenant_id,
+                snapshot_id=snapshot.snapshot_id,
+                snapshot_hash=snapshot.snapshot_hash,
+                external_operation_key=intent_record.external_operation_key,
+                state=intent_record.state,
+            )
+        except (UnsupportedQuestionForPublish, TaskStateConflict, ValueError) as exc:
+            log.warning("publish_quiz.not_publishable", extra={"task_id": task_id})
+            raise PermanentTaskError("UNSUPPORTED_QUESTIONS") from exc
+
+        ledger = {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "publish_intent_id": intent.publish_intent_id,
+        }
+
+        step_key = await asyncio.to_thread(
+            self._pubs.plan_external_step,
             tenant_id=tenant_id,
-            snapshot_id=snapshot.snapshot_id,
-            snapshot_hash=snapshot.snapshot_hash,
-            external_operation_key=external_operation_key
-            if _looks_like_sha256(external_operation_key)
-            else _sha256_hex(external_operation_key or task_id),
-            state=PublishState.EXECUTING,
+            publish_intent_id=intent.publish_intent_id,
+            step_kind=STEP_KIND,
+            ordinal=0,
+            request={
+                "course_id": snapshot.course_id,
+                "quiz_name": quiz_name,
+                "question_count": len(specs),
+                "snapshot_hash": snapshot.snapshot_hash,
+            },
         )
-
-        # --- 5. Resolve actor context (membership) ---
-        ctx = self._resolve_context(tenant_id, task)
-
-        # --- 6. Transition to EXECUTING if still APPROVED ---
-        if status in {"APPROVED", getattr(TaskStatus.APPROVED, "value", "APPROVED")}:
-            await context.transition(TaskStatus.EXECUTING)
-
-        # --- 7. Perform Moodle write + verification ---
         try:
-            outcome: PublishQuizOutcome = self._write.publish_approved_quiz(
-                ctx,
+            await asyncio.to_thread(self._pubs.mark_step_dispatched, step_key=step_key, **ledger)
+        except TaskStateConflict as exc:
+            # Preflight / approval / cancellation blocked the dispatch; nothing was sent.
+            raise RetryableTaskError("PUBLISH_BLOCKED") from exc
+
+        # --- external write: from here on every outcome is recorded in the ledger ---
+        try:
+            create_result = await asyncio.to_thread(
+                self._write.create_approved_quiz,
+                actor,
                 connection_id=snapshot.connection_id,
                 snapshot=snapshot,
                 intent=intent,
@@ -159,123 +218,117 @@ class PublishQuizHandler:
                 quiz_name=quiz_name,
                 quiz_intro=quiz_intro,
             )
+        except _DEFINITE_FAILURES as exc:
+            await self._record(step_key, ledger, "FAILED_DEFINITE")
+            log.error("publish_quiz.rejected", extra={"task_id": task_id})
+            raise PermanentTaskError("MOODLE_REJECTED") from exc
         except Exception as exc:
-            # Network / Moodle availability → retryable; auth / permanent mapping → permanent
-            from moallem.moodle.errors import (
-                MoodleCredentialInvalid,
-                MoodleFunctionNotAvailable,
-                MoodlePermissionDenied,
-                MoodleUnavailable,
-            )
+            await self._record(step_key, ledger, "UNKNOWN")
+            log.warning("publish_quiz.outcome_unknown", extra={"task_id": task_id})
+            raise PermanentTaskError("OUTCOME_UNKNOWN") from exc
 
-            if isinstance(exc, (MoodleUnavailable,)):
-                log.warning("publish_quiz.moodle_unavailable", extra={"error": str(exc)})
-                await context.transition(TaskStatus.NEEDS_RECONCILIATION)
-                raise RetryableTaskError("moodle_unavailable") from exc
-            if isinstance(
-                exc,
-                (MoodleCredentialInvalid, MoodleFunctionNotAvailable, MoodlePermissionDenied),
-            ):
-                log.error("publish_quiz.permanent_moodle_error", extra={"error": str(exc)})
-                await context.transition(TaskStatus.FAILED)
-                raise PermanentTaskError("moodle_rejected") from exc
-            log.exception("publish_quiz.unexpected_error")
+        await self._record(
+            step_key,
+            ledger,
+            "SUCCEEDED",
+            response_hash=canonical_hash(
+                {
+                    "quiz_id": create_result.moodle_quiz_id,
+                    "cmid": create_result.moodle_cmid,
+                    "operation_key": intent.external_operation_key,
+                }
+            ),
+            external_ref=str(create_result.moodle_quiz_id),
+        )
+
+        await asyncio.to_thread(self._pubs.begin_verification, **ledger)
+        try:
+            verification = await asyncio.to_thread(
+                self._write.verify_created_quiz,
+                actor,
+                connection_id=snapshot.connection_id,
+                snapshot=snapshot,
+                create_result=create_result,
+                quiz_name=quiz_name,
+                expected_question_count=len(specs),
+            )
+        except Exception as exc:
             await context.transition(TaskStatus.NEEDS_RECONCILIATION)
-            raise RetryableTaskError("publish_unknown") from exc
+            raise PermanentTaskError("VERIFICATION_UNAVAILABLE") from exc
 
-        # --- 8. Ledger based on verification ---
-        if outcome.verification.is_verified and outcome.verification.question_count == len(specs):
-            await context.transition(TaskStatus.VERIFYING)
-            await context.transition(TaskStatus.COMPLETED)
-            log.info(
-                "publish_quiz.completed",
-                extra={
-                    "tenant_id": tenant_id,
-                    "task_id": task_id,
-                    "moodle_quiz_id": outcome.create_result.moodle_quiz_id,
-                },
-            )
-        else:
+        if not verification.matches(len(specs)):
             await context.transition(TaskStatus.NEEDS_RECONCILIATION)
             log.warning(
-                "publish_quiz.needs_reconciliation",
+                "publish_quiz.verification_mismatch",
                 extra={
-                    "tenant_id": tenant_id,
                     "task_id": task_id,
-                    "moodle_quiz_id": outcome.create_result.moodle_quiz_id,
-                    "verification": {
-                        "name_matches": outcome.verification.name_matches,
-                        "course_id_matches": outcome.verification.course_id_matches,
-                        "question_count": outcome.verification.question_count,
-                    },
+                    "name_matches": verification.name_matches,
+                    "course_id_matches": verification.course_id_matches,
+                    "question_count": verification.question_count,
+                    "expected_question_count": len(specs),
                 },
             )
+            raise PermanentTaskError("VERIFICATION_MISMATCH")
 
-    def _resolve_snapshot(
-        self, tenant_id: str, task_id: str, snapshot_id: str, task: Any
-    ) -> SnapshotDescriptor:
-        if self._publications is not None:
-            # Prefer repository current snapshot when available
-            try:
-                # Build a minimal context for tenant-scoped read if needed
-                ctx = ActiveContext(
-                    user_id=str(getattr(task, "created_by", "system")),
-                    membership_id=str(getattr(task, "membership_id", "unknown")),
-                    tenant_id=tenant_id,
-                    roles=("TEACHER",),
-                )
-                record = self._publications.get_current_snapshot(ctx, task_id)
-                return SnapshotDescriptor(
-                    snapshot_id=str(getattr(record, "snapshot_id", getattr(record, "id", snapshot_id))),
-                    task_id=task_id,
-                    tenant_id=tenant_id,
-                    version_no=int(getattr(record, "version_no", 1)),
-                    snapshot_hash=str(getattr(record, "snapshot_hash", getattr(record, "content_hash", ""))),
-                    connection_id=str(getattr(record, "connection_id", "")),
-                    course_id=str(getattr(record, "course_id", "")),
-                )
-            except Exception:
-                log.debug("publish_quiz.snapshot_from_repo_failed", exc_info=True)
+        await asyncio.to_thread(
+            self._pubs.complete_verified_publish,
+            snapshot_hash_value=snapshot.snapshot_hash,
+            verification={
+                "verified": True,
+                "expected_content_match": True,
+                "external_object_type": "QUIZ",
+                "external_object_id": str(create_result.moodle_quiz_id),
+                "snapshot_hash": snapshot.snapshot_hash,
+                "course_id": snapshot.course_id,
+            },
+            **ledger,
+        )
+        log.info(
+            "publish_quiz.completed",
+            extra={"task_id": task_id, "moodle_quiz_id": create_result.moodle_quiz_id},
+        )
 
-        # Fallback for tests: attributes on the task object
+    async def _resolve_actor(self, tenant_id: str, membership_id: str) -> ActiveContext:
+        try:
+            return await asyncio.to_thread(self._actors.resolve, tenant_id, membership_id)
+        except MembershipContextInvalid as exc:
+            raise PermanentTaskError("ACTOR_NOT_ACTIVE") from exc
+
+    async def _record(
+        self,
+        step_key: str,
+        ledger: dict[str, str],
+        outcome: str,
+        *,
+        response_hash: str | None = None,
+        external_ref: str | None = None,
+    ) -> None:
+        try:
+            await asyncio.to_thread(
+                self._pubs.record_step_outcome,
+                step_key=step_key,
+                outcome=outcome,
+                response_hash=response_hash,
+                external_ref=external_ref,
+                **ledger,
+            )
+        except DomainError as exc:
+            # Moodle may already hold the quiz while the ledger is behind: manual reconciliation.
+            log.error("publish_quiz.ledger_write_failed", extra={"outcome": outcome})
+            raise PermanentTaskError("LEDGER_WRITE_FAILED") from exc
+
+
+def _descriptor(record: SnapshotRecord) -> SnapshotDescriptor:
+    destination = record.destination
+    try:
         return SnapshotDescriptor(
-            snapshot_id=snapshot_id or str(getattr(task, "snapshot_id", task_id)),
-            task_id=task_id,
-            tenant_id=tenant_id,
-            version_no=int(getattr(task, "snapshot_version", 1)),
-            snapshot_hash=str(
-                getattr(task, "snapshot_hash", _sha256_hex(f"{tenant_id}:{task_id}"))
-            ),
-            connection_id=str(getattr(task, "connection_id", "conn-test")),
-            course_id=str(getattr(task, "course_id", "1")),
+            snapshot_id=record.snapshot_id,
+            task_id=record.task_id,
+            tenant_id=record.tenant_id,
+            version_no=record.version_no,
+            snapshot_hash=record.snapshot_hash,
+            connection_id=str(destination["connection_id"]),
+            course_id=str(destination["course_id"]),
         )
-
-    def _load_and_map(
-        self, tenant_id: str, task_id: str, snapshot: SnapshotDescriptor
-    ) -> tuple[str, str, list]:
-        if self._draft_loader is None:
-            raise PermanentTaskError("draft_loader_not_configured")
-        draft = self._draft_loader.load_draft(
-            tenant_id=tenant_id, task_id=task_id, snapshot_id=snapshot.snapshot_id
-        )
-        return map_quiz_draft_to_specs(draft)
-
-    def _resolve_context(self, tenant_id: str, task: Any) -> ActiveContext:
-        if self._context_resolver is not None:
-            return self._context_resolver(tenant_id, task)
-        return ActiveContext(
-            user_id=str(getattr(task, "created_by", "system")),
-            membership_id=str(getattr(task, "membership_id", "unknown")),
-            tenant_id=tenant_id,
-            roles=("TEACHER",),
-        )
-
-
-def _sha256_hex(value: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(value.encode()).hexdigest()
-
-
-def _looks_like_sha256(value: str) -> bool:
-    return len(value) == 64 and all(c in "0123456789abcdef" for c in value.lower())
+    except (KeyError, ValueError) as exc:
+        raise PermanentTaskError("SNAPSHOT_DESTINATION_INVALID") from exc

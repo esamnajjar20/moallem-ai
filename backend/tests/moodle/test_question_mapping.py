@@ -81,3 +81,67 @@ def test_map_quiz_draft() -> None:
     assert name == "اختبار تجريبي"
     assert intro == "اقرأ بعناية"
     assert len(specs) == 1
+
+
+def test_map_multichoice_matches_by_option_id() -> None:
+    spec = map_question_draft_to_spec(_mcq(correct="a"))
+    assert [o.is_correct for o in spec.options] == [True, False]
+
+
+def test_map_multichoice_matches_arabic_text_with_diacritics_and_spaces() -> None:
+    q = QuestionDraftPreview(
+        question_id=uuid4(),
+        question_type_code="MULTICHOICE",
+        stem="ما عاصمة فلسطين؟",
+        options=(
+            AnswerOptionPreview(option_id="a", text="القُدس  الشريف"),
+            AnswerOptionPreview(option_id="b", text="حيفا"),
+        ),
+        correct_answer_preview="القدس الشريف",
+        rationale=None,
+        points=Decimal("1"),
+        source_refs=(),
+        unsupported=False,
+        unsupported_reason=None,
+    )
+    spec = map_question_draft_to_spec(q)
+    assert [o.is_correct for o in spec.options] == [True, False]
+    # What is sent to Moodle keeps the original text, not the normalized one.
+    assert spec.options[0].text == "القُدس  الشريف"
+
+
+def test_map_multichoice_rejects_ambiguous_correct_answer() -> None:
+    q = QuestionDraftPreview(
+        question_id=uuid4(),
+        question_type_code="MULTICHOICE",
+        stem="سؤال",
+        options=(
+            AnswerOptionPreview(option_id="a", text="نعم"),
+            AnswerOptionPreview(option_id="b", text="نَعَم"),
+        ),
+        correct_answer_preview="نعم",
+        rationale=None,
+        points=Decimal("1"),
+        source_refs=(),
+        unsupported=False,
+        unsupported_reason=None,
+    )
+    with pytest.raises(UnsupportedQuestionForPublish, match="several"):
+        map_question_draft_to_spec(q)
+
+
+def test_map_shortanswer_requires_answer() -> None:
+    q = QuestionDraftPreview(
+        question_id=uuid4(),
+        question_type_code="SHORTANSWER",
+        stem="اذكر العاصمة",
+        options=(),
+        correct_answer_preview=None,
+        rationale=None,
+        points=Decimal("1"),
+        source_refs=(),
+        unsupported=False,
+        unsupported_reason=None,
+    )
+    with pytest.raises(UnsupportedQuestionForPublish):
+        map_question_draft_to_spec(q)

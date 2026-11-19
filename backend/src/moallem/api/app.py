@@ -31,8 +31,8 @@ from moallem.api.jwks import UrlJwks, jwks_url_for_issuer
 from moallem.api.me import router as me_router
 from moallem.api.schemas import ErrorDetails, ErrorEnvelope, FieldError
 from moallem.api.tasks import router as task_router
-from moallem.config import Environment, Settings, load_settings
-from moallem.domain.authorization import DenyAllPolicy, PermissionPolicy
+from moallem.config import Environment, PermissionPolicyName, Settings, load_settings
+from moallem.domain.authorization import DenyAllPolicy, PermissionPolicy, TeacherMVPPolicy
 from moallem.domain.errors import AuthenticationRequired, DomainError
 from moallem.domain.identity import DerivedSubjectMapper
 from moallem.domain.membership import InMemoryMembershipRepository, MembershipRepository
@@ -271,7 +271,11 @@ def create_app(
         new_postgres_connection_repository(db_sessions) if db_sessions is not None else None
     )
     app.state.moodle_read_service = moodle_read_service
-    app.state.permission_policy = permission_policy or DenyAllPolicy()
+    app.state.permission_policy = permission_policy or (
+        TeacherMVPPolicy()
+        if settings.permission_policy is PermissionPolicyName.TEACHER_MVP
+        else DenyAllPolicy()
+    )
     app.state.task_repository = (
         PostgresTaskRepository(db_sessions) if db_sessions is not None else None
     )

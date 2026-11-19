@@ -106,3 +106,35 @@ def test_quiz_verification_is_verified_property() -> None:
         verified_at=datetime.now(UTC),
     )
     assert bad.is_verified is False
+
+
+def _verification(**overrides: object):  # type: ignore[no-untyped-def]
+    from moallem.moodle.write import QuizVerification
+
+    base: dict[str, object] = {
+        "moodle_quiz_id": 1,
+        "name_matches": True,
+        "question_count": 3,
+        "course_id_matches": True,
+        "verified_at": datetime.now(UTC),
+    }
+    base.update(overrides)
+    return QuizVerification(**base)  # type: ignore[arg-type]
+
+
+def test_verification_requires_exact_question_count() -> None:
+    assert _verification().matches(3)
+    assert not _verification().matches(4)
+
+
+def test_unknown_question_count_never_verifies() -> None:
+    from moallem.moodle.write import UNKNOWN_QUESTION_COUNT
+
+    v = _verification(question_count=UNKNOWN_QUESTION_COUNT)
+    assert not v.is_verified
+    assert not v.matches(UNKNOWN_QUESTION_COUNT)
+
+
+def test_verification_fails_on_name_or_course_mismatch() -> None:
+    assert not _verification(name_matches=False).matches(3)
+    assert not _verification(course_id_matches=False).matches(3)

@@ -1,4 +1,5 @@
 import '../../../core/api/api_client.dart';
+import '../../../core/api/api_exception.dart';
 import '../domain/course.dart';
 
 abstract class MoodleRepository {
@@ -49,23 +50,22 @@ class MockMoodleRepository implements MoodleRepository {
   }
 }
 
+/// Talks to the endpoints that exist today: `GET /courses?connection_id=`.
+/// There is no connection-management endpoint yet (gap CONN-API), so the connection UUID
+/// comes from `--dart-define=MOALLEM_CONNECTION_ID` and [connect] is unavailable.
 class ApiMoodleRepository implements MoodleRepository {
-  ApiMoodleRepository(this._client);
+  ApiMoodleRepository(this._client, {this.connectionId});
 
   final ApiClient _client;
+  final String? connectionId;
 
   @override
   Future<MoodleConnectionStatus> connectionStatus() async {
-    try {
-      final data = await _client.getJson('moodle/connection');
-      return MoodleConnectionStatus(
-        connected: data['status'] == 'ACTIVE',
-        siteUrl: data['site_url']?.toString(),
-        connectionId: data['connection_id']?.toString(),
-      );
-    } catch (_) {
+    final id = connectionId;
+    if (id == null || id.isEmpty) {
       return const MoodleConnectionStatus(connected: false);
     }
+    return MoodleConnectionStatus(connected: true, connectionId: id);
   }
 
   @override
@@ -73,25 +73,34 @@ class ApiMoodleRepository implements MoodleRepository {
     required String siteUrl,
     required String token,
   }) async {
-    final data = await _client.postJson('moodle/connection', body: {
-      'site_url': siteUrl,
-      'token': token,
-    });
-    return MoodleConnectionStatus(
-      connected: true,
-      siteUrl: data['site_url']?.toString() ?? siteUrl,
-      connectionId: data['connection_id']?.toString(),
+    throw ApiException(
+      message: 'ربط Moodle من التطبيق غير متاح بعد؛ اضبط MOALLEM_CONNECTION_ID',
+      code: 'CONNECTION_API_UNAVAILABLE',
     );
   }
 
   @override
   Future<List<CourseSummary>> listCourses() async {
-    final data = await _client.getJson('courses');
-    final items = data['items'] ?? data['courses'] ?? data['data'];
-    if (items is! List) return [];
-    return items
-        .whereType<Map>()
-        .map((e) => CourseSummary.fromJson(Map<String, dynamic>.from(e)))
-        .toList();
+    final id = connectionId;
+    if (id == null || id.isEmpty) return [];
+    final courses = <CourseSummary>[];
+    String? cursor;
+    // Follow pagination; bounded so a misbehaving server cannot loop forever.
+    for (var page = 0; page < 20; page++) {
+      final data = await _client.getJson('courses', query: {
+        'connection_id': id,
+        'limit': '100',
+        if (cursor != null) 'cursor': cursor,
+      });
+      final items = data['items'];
+      if (items is List<dynamic>) {
+        courses.addAll(
+          items.whereType<Map<String, dynamic>>().map(CourseSummary.fromJson),
+        );
+      }
+      cursor = data['next_cursor']?.toString();
+      if (data['has_more'] != true || cursor == null) break;
+    }
+    return courses;
   }
 }

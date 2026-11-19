@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -12,6 +13,8 @@ class ApiClient {
     required this.config,
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client();
+
+  static const Duration requestTimeout = Duration(seconds: 30);
 
   final AppConfig config;
   final http.Client _http;
@@ -43,19 +46,32 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getJson(String path, {Map<String, String>? query}) async {
-    final res = await _http.get(_uri(path, query), headers: _headers());
+    final res = await _send(() => _http.get(_uri(path, query), headers: _headers()));
     return _decode(res);
   }
 
   Future<Map<String, dynamic>> postJson(String path, {Object? body, Map<String, String>? headers}) async {
     final h = _headers();
     if (headers != null) h.addAll(headers);
-    final res = await _http.post(
-      _uri(path),
-      headers: h,
-      body: body == null ? null : jsonEncode(body),
+    final res = await _send(
+      () => _http.post(
+        _uri(path),
+        headers: h,
+        body: body == null ? null : jsonEncode(body),
+      ),
     );
     return _decode(res);
+  }
+
+  /// Maps transport failures to [ApiException] so screens never see raw socket errors.
+  Future<http.Response> _send(Future<http.Response> Function() request) async {
+    try {
+      return await request().timeout(requestTimeout);
+    } on TimeoutException {
+      throw ApiException(message: 'انتهت مهلة الاتصال بالخادم', code: 'NETWORK_TIMEOUT');
+    } on http.ClientException {
+      throw ApiException(message: 'تعذر الاتصال بالخادم', code: 'NETWORK_ERROR');
+    }
   }
 
   Map<String, dynamic> _decode(http.Response res) {

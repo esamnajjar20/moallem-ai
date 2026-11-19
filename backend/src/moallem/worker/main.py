@@ -8,10 +8,11 @@ import sys
 from moallem import __version__
 from moallem.config import ConfigError, Settings, load_settings
 from moallem.logging import configure_logging
-from moallem.persistence.database import create_database
+from moallem.persistence.database import SessionFactory, create_database
 from moallem.persistence.idempotency_repository import PostgresIdempotencyRepository
 from moallem.persistence.outbox_repository import PostgresOutboxRepository
 from moallem.persistence.publishing_repository import PostgresPublicationRepository
+from moallem.persistence.repositories import PostgresMembershipRepository
 from moallem.persistence.task_repository import PostgresTaskRepository
 from moallem.worker.composition import build_handler_registry
 from moallem.worker.queue import (
@@ -61,31 +62,28 @@ def _worker_settings(settings: Settings) -> WorkerSettings:
     )
 
 
-def _build_handlers(settings: Settings, sessions: object) -> TaskHandlerRegistry:
+def _build_handlers(settings: Settings, sessions: SessionFactory) -> TaskHandlerRegistry:
     """Compose task handlers.
 
-    CREATE_QUIZ publish is registered only when Moodle write dependencies are
-    explicitly provided via build_handler_registry(...). By default the worker
-    starts with publications available for future wiring but without a live
-    Moodle write path (fail-closed).
+    CREATE_QUIZ publish is registered only when the Moodle write dependencies exist. The
+    repository has no production ConnectionRepository yet (gap CONN-API) and the Staging
+    write adapter needs the A1 evidence, so the worker starts WITHOUT a publish handler and
+    logs that explicitly (fail-closed). To enable it in a controlled environment pass every
+    dependency to ``build_handler_registry``:
 
-    To enable the publish path in a controlled environment:
-
-        handlers = build_handler_registry(
-            publications=PostgresPublicationRepository(sessions),
-            connections=...,
-            vault=...,
-            transport=...,
-            resolver=...,
-            write_adapter=StagingMoodleWriteAdapter(...),  # after A1
+        build_handler_registry(
+            publications=PostgresPublicationRepository(sessions, publish_authorizer=...),
+            connections=..., vault=..., transport=..., resolver=...,
+            memberships=PostgresMembershipRepository(sessions),
+            write_adapter=StagingMoodleWriteAdapter(StagingWriteConfig(...)),  # after A1
             enable_teacher_policy=True,
         )
     """
     del settings  # reserved for future feature flags
-    publications = PostgresPublicationRepository(sessions)  # type: ignore[arg-type]
-    # Moodle network deps are intentionally omitted until Staging evidence (A1)
-    # and a concrete write adapter exist. Registry stays empty for CREATE_QUIZ.
-    return build_handler_registry(publications=publications)
+    return build_handler_registry(
+        publications=PostgresPublicationRepository(sessions),
+        memberships=PostgresMembershipRepository(sessions),
+    )
 
 
 async def run(
@@ -112,7 +110,7 @@ async def run(
         extra={
             "config": settings.safe_summary(),
             "version": __version__,
-            "registered_task_types": sorted(handlers.registered_types()),
+            "registered_task_types": sorted(handlers.registered_types),
         },
     )
     try:

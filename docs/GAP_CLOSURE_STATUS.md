@@ -1,68 +1,39 @@
-# إغلاق الفجوات — حالة الربط الشامل
+# إغلاق الفجوات — الحالة بعد المراجعة والإصلاح
 
-**التاريخ:** 2026-11-17
+**التاريخ:** 2026-11-18
+**المرجع:** تقرير مراجعة Moallem AI (حزمة إغلاق الفجوات).
 
-## ما أُغلق بالكود في هذه الجولة
+> **ملاحظة صدق:** الإصلاحات أدناه كُتبت ورُوجعت بقراءة الكود فقط. لم تُشغَّل
+> الاختبارات ولا `ruff` ولا `mypy` ولا `flutter analyze` في بيئة الإصلاح (بلا شبكة).
+> شغّل `make check` و`make mobile-check` قبل الاعتماد.
 
-| الفجوة | الإجراء |
-|--------|--------|
-| مصفوفة الصلاحيات لا تطابق `task.create` في API | أُضيف `PERM_TASK_CREATE` إلى `TeacherMVPPolicy` |
-| مسارات Flutter لا تطابق Backend | محاذاة `ApiQuizRepository` مع `/tasks`, `/tasks/{id}/snapshot`, `/tasks/{id}/approvals`, `/tasks/{id}/result` + `Idempotency-Key` |
-| عدم وجود Write Adapter جاهز للـ Staging | `StagingMoodleWriteAdapter` (fail-closed حتى تُمرَّر `StagingWriteConfig` من أدلة A1) |
-| مسار النشر غير قابل للاختبار بدون شبكة | اختبارات Fake + mapping + policy |
-| توثيق ما تبقى خارجيًا | هذا الملف |
+## ما أُصلح
 
-## سلسلة Vertical Slice (بعد الإغلاق)
+| # | المشكلة | الإصلاح |
+|---|---------|---------|
+| 1 | `registered_types()` تُستدعى كدالة وهي property | `worker/main.py` |
+| 2 | `MoodleClient(site_url=…)` و`vault.reveal(ref)` بتوقيع خاطئ | `moodle/write_service.py` |
+| 3 | قراءة `connection_id/course_id` من حقول غير موجودة + سقوط على قيم اختبار | الوجهة من `snapshot.destination` والفشل مغلق (`SNAPSHOT_DESTINATION_INVALID`) |
+| 4 | المعالج لا يستخدم سجل النشر ويكرر انتقالات الحالة | `worker/handlers/publish_quiz.py` يتبع: intent ← plan ← dispatch ← outcome ← verifying ← complete |
+| 5 | الأسئلة لا تُرسل والتحقق شكلي | `staging_write_adapter.py`: إرسال فعلي، `MoodlePartialWrite`، idnumber كامل، بحث idempotent، عدد غير معروف لا يُتحقَّق |
+| 6 | اختبار النشر لا يختبر النشر | `tests/worker/test_publish_handler.py` + `tests/moodle/test_write_service.py` |
+| 7 | سجل الـ Worker فارغ/غير مختبر | `worker/composition.py` + `test_composition.py` (يبقى fail-closed بدون الاعتماديات) |
+| 8 | فحص المستأجر شكلي | `snapshot.tenant_id` مقابل `ctx` + ربط `connection_id` |
+| 9 | أدوار `TEACHER` ثابتة في الـ Worker | `worker/actor.py` يعيد قراءة العضوية (نشطة/مستأجر/أدوار) |
+| 10 | مصفوفة الصلاحيات لا تُفعَّل في الـ API | `MOALLEM_PERMISSION_POLICY=teacher_mvp` (الافتراضي `deny_all`) |
+| 11 | مطابقة الإجابة بالنص الحرفي | `option_id` أولًا ثم تطبيع Unicode/تشكيل؛ الغموض يُرفض |
+| 12 | استدعاءات شبكة متزامنة داخل async | `asyncio.to_thread` |
+| 13 | `CourseSummary` لا يُترجم (حقل `fullname`) | `course.dart` |
+| 14 | تسجيل الدخول بلا توكن؛ `connection_id = membership_id`؛ موافقة ببيانات وهمية؛ لا انتظار للمسودة/النشر؛ `COMPLETED` ثابتة | تعديلات Flutter (راجع الملفات) |
+| 15 | أسطر طويلة/ترتيب imports في الملفات المعدّلة | عُدّلت؛ `ruff format` و`dart format` لم يُشغَّلا |
 
-```
-Flutter (Mock أو API)
-  → POST /api/v1/tasks (CREATE_QUIZ)
-  → Worker: توليد مسودة + جودة (P5/P6 — ما زال DenyAllAI بدون مزود)
-  → GET snapshot → معاينة في التطبيق
-  → POST /tasks/{id}/approvals
-  → Worker PublishQuizHandler
-       → SnapshotDraftLoader
-       → question_mapping
-       → MoodleWriteService + TeacherMVPPolicy
-       → Fake / Staging / DenyAll adapter
-  → GET /tasks/{id}/result
-```
+## ما لا يزال مفتوحًا (خارج الكود)
 
-## فجوات ما زالت خارجية (لا تُغلق بالكود وحده)
-
-| ID | الفجوة | المالك |
-|----|--------|--------|
-| A1 | Moodle Staging URL + token + دوال WS لإنشاء الاختبار | Moodle Admin |
-| A3 | مزود AI + مفاتيح + ميزانية | Product / FinOps |
-| AUTH | Auth0 PKCE حقيقي على الموبايل | Mobile + Auth |
-| CONN-API | لا يوجد بعد endpoint HTTP رسمي لإنشاء Moodle connection في الـ API (الربط عبر عمليات داخلية / لاحقًا) | Backend |
-| STAGING-FN | أسماء دوال create/verify على الموقع الحقيقي | A1 evidence |
-
-## تفعيل مسار النشر على Staging (عند توفر A1)
-
-```python
-from moallem.moodle.staging_write_adapter import StagingMoodleWriteAdapter, StagingWriteConfig
-from moallem.worker.composition import build_handler_registry
-
-adapter = StagingMoodleWriteAdapter(
-    StagingWriteConfig(
-        create_quiz_function="...",  # من دليل Staging
-        verify_quiz_function="...",
-    )
-)
-handlers = build_handler_registry(
-    publications=publications,
-    connections=connections,
-    vault=vault,
-    transport=transport,
-    resolver=resolver,
-    write_adapter=adapter,
-    enable_teacher_policy=True,
-)
-```
-
-## الحكم النهائي
-
-- **الفجوات البرمجية القابلة للإغلاق في المستودع:** أُغلقت أو رُبطت.
-- **الفجوات التشغيلية/الخارجية:** تبقى بوابة Pilot (Staging + AI provider + Auth0).
-- المنتج ما زال **غير جاهز لـ Pilot حقيقي** حتى تُغلق A1 وA3، لكنه **جاهز هندسيًا** لربطها دون إعادة تصميم.
+| ID | الفجوة |
+|----|--------|
+| A1 | أسماء دوال WS وبارامتراتها وصيغة ردودها على Moodle Staging؛ الـ adapter مغلق حتى تُمرَّر `StagingWriteConfig` |
+| AUTH | Auth0 PKCE على الموبايل؛ الحالي تسجيل بتوكن يُتحقق منه عبر `/me` ويُخزَّن في secure storage |
+| CONN-API | لا endpoint لإدارة اتصال Moodle؛ التطبيق يقرأ `MOALLEM_CONNECTION_ID` |
+| KEY-CUSTODY | مفتاح تشفير الخزنة للـ Worker؛ لذلك لا يُسجَّل معالج النشر في `worker/main.py` افتراضيًا |
+| PREFLIGHT | `PublishAuthorizer` الحقيقي غير موجود؛ الافتراضي `DenyAll` يمنع الإرسال (`PUBLISH_BLOCKED`) |
+| LOCK | `mobile/pubspec.lock` يحتاج `flutter pub get` لتحديثه |

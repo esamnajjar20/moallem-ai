@@ -21,13 +21,13 @@ final sessionProvider = StateProvider<TeacherSession?>((ref) => null);
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   final config = ref.watch(appConfigProvider);
   if (config.useMocks) return MockAuthRepository();
-  return ApiAuthRepository(ref.watch(apiClientProvider));
+  return ApiAuthRepository(ref.watch(apiClientProvider), SecureTokenStore());
 });
 
 final moodleRepositoryProvider = Provider<MoodleRepository>((ref) {
   final config = ref.watch(appConfigProvider);
   if (config.useMocks) return MockMoodleRepository();
-  return ApiMoodleRepository(ref.watch(apiClientProvider));
+  return ApiMoodleRepository(ref.watch(apiClientProvider), connectionId: config.connectionId);
 });
 
 final quizRepositoryProvider = Provider<QuizRepository>((ref) {

@@ -24,10 +24,13 @@ class _ApprovalScreenState extends ConsumerState<ApprovalScreen> {
     });
     try {
       final repo = ref.read(quizRepositoryProvider);
-      // Snapshot ids come from GET /tasks/{id}/snapshot in API mode.
-      // Mocks accept any non-empty values.
-      const snapshotId = '00000000-0000-4000-8000-0000000000s1';
-      const snapshotHash = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+      // Approve exactly the immutable snapshot issued by the server (id + hash).
+      final draft = await repo.getDraft(widget.taskId);
+      final snapshotId = draft.snapshotId;
+      final snapshotHash = draft.snapshotHash;
+      if (snapshotId == null || snapshotId.isEmpty || snapshotHash == null || snapshotHash.isEmpty) {
+        throw StateError('تعذر تحديد نسخة الاختبار المراد اعتمادها');
+      }
       if (approve) {
         await repo.approve(widget.taskId, snapshotId: snapshotId, snapshotHash: snapshotHash);
         if (!mounted) return;

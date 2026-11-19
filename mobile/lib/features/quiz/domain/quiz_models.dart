@@ -69,6 +69,8 @@ class QuizDraft {
     this.instructions,
     this.qualityIssues = const [],
     this.status = 'DRAFT',
+    this.snapshotId,
+    this.snapshotHash,
   });
 
   final String taskId;
@@ -77,6 +79,10 @@ class QuizDraft {
   final List<QuestionPreview> questions;
   final List<QualityIssue> qualityIssues;
   final String status;
+
+  /// Immutable snapshot the teacher is approving (server-issued; required for approval).
+  final String? snapshotId;
+  final String? snapshotHash;
 
   factory QuizDraft.fromJson(Map<String, dynamic> json) {
     final qs = <QuestionPreview>[];
@@ -106,6 +112,8 @@ class QuizDraft {
       questions: qs,
       qualityIssues: issues,
       status: json['status']?.toString() ?? 'DRAFT',
+      snapshotId: json['snapshot_id']?.toString(),
+      snapshotHash: json['snapshot_hash']?.toString(),
     );
   }
 }

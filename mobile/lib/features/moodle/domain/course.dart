@@ -1,7 +1,7 @@
 class CourseSummary {
   const CourseSummary({
     required this.id,
-    required this.fullname,
+    required this.title,
     this.shortName,
     this.visible = true,
   });

@@ -12,10 +12,20 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
-  final _email = TextEditingController(text: 'teacher@example.com');
-  final _password = TextEditingController(text: 'password');
+  late final bool _mocks;
+  late final TextEditingController _email;
+  late final TextEditingController _password;
   bool _loading = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _mocks = ref.read(appConfigProvider).useMocks;
+    // Demo credentials only in mock mode; never prefilled against a real API.
+    _email = TextEditingController(text: _mocks ? 'teacher@example.com' : '');
+    _password = TextEditingController(text: _mocks ? 'password' : '');
+  }
 
   @override
   void dispose() {
@@ -75,8 +85,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   const SizedBox(height: 32),
                   TextField(
                     controller: _email,
-                    decoration: const InputDecoration(
-                      labelText: 'البريد الإلكتروني',
+                    decoration: InputDecoration(
+                      labelText: _mocks ? 'البريد الإلكتروني' : 'الاسم (للعرض)',
                     ),
                     keyboardType: TextInputType.emailAddress,
                     textDirection: TextDirection.ltr,
@@ -84,7 +94,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: _password,
-                    decoration: const InputDecoration(labelText: 'كلمة المرور'),
+                    decoration: InputDecoration(
+                      labelText: _mocks ? 'كلمة المرور' : 'رمز الدخول (Access Token)',
+                    ),
                     obscureText: true,
                     textDirection: TextDirection.ltr,
                   ),

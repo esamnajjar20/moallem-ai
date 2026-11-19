@@ -20,7 +20,7 @@ class _QuizPreviewScreenState extends ConsumerState<QuizPreviewScreen> {
   @override
   void initState() {
     super.initState();
-    _future = ref.read(quizRepositoryProvider).getDraft(widget.taskId);
+    _future = ref.read(quizRepositoryProvider).awaitDraft(widget.taskId);
   }
 
   @override

@@ -28,7 +28,7 @@ class _PublishStatusScreenState extends ConsumerState<PublishStatusScreen> {
   Future<void> _run() async {
     try {
       final repo = ref.read(quizRepositoryProvider);
-      final status = await repo.getVerifiedResult(widget.taskId);
+      final status = await repo.awaitPublishResult(widget.taskId);
       setState(() {
         _status = status;
         _loading = false;

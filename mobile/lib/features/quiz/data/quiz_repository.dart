@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import '../../../core/api/api_client.dart';
+import '../../../core/api/api_exception.dart';
 import '../domain/quiz_models.dart';
 
 abstract class QuizRepository {
@@ -12,6 +13,20 @@ abstract class QuizRepository {
     required List<String> questionTypes,
   });
   Future<QuizDraft> getDraft(String taskId);
+
+  /// Waits (polling) until the generated draft is ready for approval.
+  Future<QuizDraft> awaitDraft(
+    String taskId, {
+    Duration interval = const Duration(seconds: 2),
+    Duration timeout = const Duration(minutes: 3),
+  });
+
+  /// Waits (polling) for the worker to publish and for Moodle verification to finish.
+  Future<PublishStatus> awaitPublishResult(
+    String taskId, {
+    Duration interval = const Duration(seconds: 2),
+    Duration timeout = const Duration(minutes: 3),
+  });
   Future<void> approve(String taskId, {required String snapshotId, required String snapshotHash});
   Future<void> reject(String taskId, {required String snapshotId, required String snapshotHash, String? reason});
   Future<PublishStatus> getPublishStatus(String taskId);
@@ -74,6 +89,8 @@ class MockQuizRepository implements QuizRepository {
         QualityIssue(code: 'INFO', message: 'مسودة تجريبية (وضع المحاكاة)'),
       ],
       status: 'AWAITING_APPROVAL',
+      snapshotId: '00000000-0000-4000-8000-0000000000a$_seq',
+      snapshotHash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
     );
     _drafts[taskId] = draft;
     return draft;
@@ -96,6 +113,8 @@ class MockQuizRepository implements QuizRepository {
       questions: d.questions,
       qualityIssues: d.qualityIssues,
       status: 'APPROVED',
+      snapshotId: d.snapshotId,
+      snapshotHash: d.snapshotHash,
     );
   }
 
@@ -109,6 +128,8 @@ class MockQuizRepository implements QuizRepository {
       questions: d.questions,
       qualityIssues: d.qualityIssues,
       status: 'REJECTED',
+      snapshotId: d.snapshotId,
+      snapshotHash: d.snapshotHash,
     );
   }
 
@@ -116,6 +137,30 @@ class MockQuizRepository implements QuizRepository {
   Future<PublishStatus> getPublishStatus(String taskId) async {
     return _publish[taskId] ??
         PublishStatus(taskId: taskId, state: 'APPROVED', message: 'جاهز للنشر عبر الـ Worker');
+  }
+
+  @override
+  Future<QuizDraft> awaitDraft(
+    String taskId, {
+    Duration interval = const Duration(seconds: 2),
+    Duration timeout = const Duration(minutes: 3),
+  }) => getDraft(taskId);
+
+  @override
+  Future<PublishStatus> awaitPublishResult(
+    String taskId, {
+    Duration interval = const Duration(seconds: 2),
+    Duration timeout = const Duration(minutes: 3),
+  }) async {
+    final draft = await getDraft(taskId);
+    if (draft.status != 'APPROVED') {
+      return PublishStatus(
+        taskId: taskId,
+        state: draft.status,
+        message: 'لم تتم الموافقة على الاختبار بعد (محاكاة)',
+      );
+    }
+    return getVerifiedResult(taskId);
   }
 
   @override
@@ -178,15 +223,87 @@ class ApiQuizRepository implements QuizRepository {
     final data = await _client.getJson('tasks/$taskId/snapshot');
     final content = data['content'] is Map
         ? Map<String, dynamic>.from(data['content'] as Map)
-        : data;
+        : <String, dynamic>{};
     final preview = content['preview'] is Map
         ? Map<String, dynamic>.from(content['preview'] as Map)
         : content;
     return QuizDraft.fromJson({
       ...preview,
       'task_id': taskId,
-      'status': data['status']?.toString() ?? 'AWAITING_APPROVAL',
+      'status': 'AWAITING_APPROVAL',
+      'snapshot_id': data['snapshot_id'],
+      'snapshot_hash': data['snapshot_hash'],
+      'quality_report': data['quality_report'],
     });
+  }
+
+  static const _generationFailed = {
+    'FAILED',
+    'CANCELLED',
+    'REJECTED',
+    'EXPIRED',
+    'NEEDS_INPUT',
+    'NEEDS_REVISION',
+  };
+
+  Future<String> _taskStatus(String taskId) async {
+    final data = await _client.getJson('tasks/$taskId');
+    return data['task_status']?.toString() ?? data['status']?.toString() ?? 'UNKNOWN';
+  }
+
+  @override
+  Future<QuizDraft> awaitDraft(
+    String taskId, {
+    Duration interval = const Duration(seconds: 2),
+    Duration timeout = const Duration(minutes: 3),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (true) {
+      final status = await _taskStatus(taskId);
+      if (status == 'AWAITING_APPROVAL') return getDraft(taskId);
+      if (_generationFailed.contains(status)) {
+        throw ApiException(message: 'تعذر توليد الاختبار ($status)', code: status);
+      }
+      if (DateTime.now().isAfter(deadline)) {
+        throw ApiException(
+          message: 'استغرق التوليد وقتاً أطول من المتوقع، حاول لاحقاً',
+          code: 'GENERATION_TIMEOUT',
+        );
+      }
+      await Future<void>.delayed(interval);
+    }
+  }
+
+  static const _publishStopped = {'FAILED', 'CANCELLED', 'EXPIRED', 'NEEDS_RECONCILIATION'};
+
+  @override
+  Future<PublishStatus> awaitPublishResult(
+    String taskId, {
+    Duration interval = const Duration(seconds: 2),
+    Duration timeout = const Duration(minutes: 3),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (true) {
+      final status = await _taskStatus(taskId);
+      if (status == 'COMPLETED') return getVerifiedResult(taskId);
+      if (_publishStopped.contains(status)) {
+        return PublishStatus(
+          taskId: taskId,
+          state: status,
+          message: status == 'NEEDS_RECONCILIATION'
+              ? 'تعذر التأكد من نتيجة النشر؛ يلزم فحص يدوي قبل إعادة المحاولة'
+              : 'لم يكتمل النشر',
+        );
+      }
+      if (DateTime.now().isAfter(deadline)) {
+        return PublishStatus(
+          taskId: taskId,
+          state: status,
+          message: 'النشر ما زال قيد التنفيذ، افتح هذه الصفحة لاحقاً',
+        );
+      }
+      await Future<void>.delayed(interval);
+    }
   }
 
   @override
@@ -229,11 +346,12 @@ class ApiQuizRepository implements QuizRepository {
   @override
   Future<PublishStatus> getVerifiedResult(String taskId) async {
     final data = await _client.getJson('tasks/$taskId/result');
+    final verified = data['verification_status'] == 'VERIFIED';
     return PublishStatus(
       taskId: taskId,
-      state: 'COMPLETED',
-      moodleQuizId: data['moodle_quiz_id'] as int?,
-      message: data['message']?.toString(),
+      state: verified ? 'COMPLETED' : 'UNVERIFIED',
+      moodleQuizId: int.tryParse(data['external_object_id']?.toString() ?? ''),
+      message: verified ? 'تم إنشاء الاختبار والتحقق منه في Moodle' : 'لم يتم التحقق من الاختبار',
     );
   }
 }

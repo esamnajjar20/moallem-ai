@@ -1,30 +1,13 @@
-"""Tests for SnapshotDraftLoader."""
+"""Tests for draft_from_snapshot_content."""
 
-from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 
-from moallem.ai.quiz.contracts import AnswerOptionPreview, QuestionDraftPreview, QuizDraftPreview
-from moallem.domain.errors import TaskStateConflict
-from moallem.worker.draft_loader import SnapshotDraftLoader
-
-
-class _FakeSnapshot:
-    def __init__(self, snapshot_id: str, content: dict) -> None:
-        self.snapshot_id = snapshot_id
-        self.content = content
-        self.schema_version = "1.0"
-
-
-class _FakeSource:
-    def __init__(self, record: _FakeSnapshot) -> None:
-        self._record = record
-
-    def get_current_snapshot(self, ctx, task_id: str):  # noqa: ANN001
-        del ctx, task_id
-        return self._record
+from moallem.ai.quiz.contracts import QuestionDraftPreview, QuizDraftPreview
+from moallem.domain.errors import ResourceNotFound, TaskStateConflict
+from moallem.worker.draft_loader import draft_from_snapshot_content
 
 
 def _preview() -> QuizDraftPreview:
@@ -50,53 +33,23 @@ def _preview() -> QuizDraftPreview:
     )
 
 
-def test_load_from_top_level_preview() -> None:
+def test_loads_validated_preview() -> None:
     preview = _preview()
-    source = _FakeSource(
-        _FakeSnapshot("snap-1", {"preview": preview.model_dump(mode="json")})
-    )
-    loader = SnapshotDraftLoader(source)
-    loaded = loader.load_draft(tenant_id=str(uuid4()), task_id=str(uuid4()), snapshot_id="snap-1")
+    loaded = draft_from_snapshot_content({"preview": preview.model_dump(mode="json")})
     assert loaded.title == "اختبار"
     assert len(loaded.questions) == 1
 
 
-def test_rejects_stale_snapshot_id() -> None:
-    preview = _preview()
-    source = _FakeSource(
-        _FakeSnapshot("snap-head", {"preview": preview.model_dump(mode="json")})
-    )
-    loader = SnapshotDraftLoader(source)
+def test_missing_preview_is_not_publishable() -> None:
     with pytest.raises(TaskStateConflict):
-        loader.load_draft(
-            tenant_id=str(uuid4()), task_id=str(uuid4()), snapshot_id="snap-old"
-        )
+        draft_from_snapshot_content({"questions": []})
 
 
-def test_rebuild_from_question_previews() -> None:
-    q = QuestionDraftPreview(
-        question_id=uuid4(),
-        question_type_code="SHORTANSWER",
-        stem="عاصمة مصر؟",
-        options=(),
-        correct_answer_preview="القاهرة",
-        rationale=None,
-        points=Decimal("2"),
-        source_refs=(),
-        unsupported=False,
-        unsupported_reason=None,
-    )
-    content = {
-        "spec": {"name": "جغرافيا", "instructions": "أجب"},
-        "questions": [
-            {
-                "preview": q.model_dump(mode="json"),
-            }
-        ],
-        "schema_version": "1.0",
-    }
-    source = _FakeSource(_FakeSnapshot("snap-2", content))
-    loader = SnapshotDraftLoader(source)
-    loaded = loader.load_draft(tenant_id=str(uuid4()), task_id=str(uuid4()), snapshot_id="snap-2")
-    assert loaded.title == "جغرافيا"
-    assert loaded.questions[0].stem == "عاصمة مصر؟"
+def test_non_mapping_content_is_not_found() -> None:
+    with pytest.raises(ResourceNotFound):
+        draft_from_snapshot_content(None)
+
+
+def test_invalid_preview_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        draft_from_snapshot_content({"preview": {"title": ""}})

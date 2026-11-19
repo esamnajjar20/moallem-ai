@@ -31,6 +31,11 @@ class LogLevel(StrEnum):
     ERROR = "ERROR"
 
 
+class PermissionPolicyName(StrEnum):
+    DENY_ALL = "deny_all"
+    TEACHER_MVP = "teacher_mvp"  # DEC-027 approved Teacher MVP matrix
+
+
 class ConfigError(RuntimeError):
     """Raised on invalid configuration. Message contains field names only."""
 
@@ -49,6 +54,8 @@ class Settings(BaseSettings):
 
     env: Environment = Environment.DEVELOPMENT
     log_level: LogLevel = LogLevel.INFO
+    # Fail-closed default. "teacher_mvp" enables the approved DEC-027 matrix for the API.
+    permission_policy: PermissionPolicyName = PermissionPolicyName.DENY_ALL
     database_url: SecretStr | None = None
     redis_url: SecretStr | None = None
     readiness_timeout_seconds: float = 2.0

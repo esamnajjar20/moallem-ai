@@ -1,22 +1,28 @@
 """Worker handler composition (Phase B).
 
-Builds a TaskHandlerRegistry. Publish path is registered only when the required
-collaborators are supplied. The Moodle write adapter defaults to DenyAll so
-production remains fail-closed until a Staging adapter is injected.
+Builds a TaskHandlerRegistry. The publish path is registered only when every collaborator
+is supplied. The Moodle write adapter defaults to DenyAll and the permission policy to
+DenyAll, so production stays fail-closed until a Staging adapter and an approved policy are
+injected explicitly.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from moallem.domain.authorization import DenyAllPolicy, PermissionPolicy, TeacherMVPPolicy
+from moallem.domain.membership import MembershipRepository
+from moallem.domain.secrets import SecretVault
+from moallem.moodle.client import MoodleTransport
 from moallem.moodle.fake_write_adapter import FakeWriteAdapter
+from moallem.moodle.service import ConnectionRepository
+from moallem.moodle.url_policy import PrivateNetworkProfile, Resolver
 from moallem.moodle.write import DenyAllWriteAdapter, MoodleWriteAdapter
 from moallem.moodle.write_service import MoodleWriteService
-from moallem.worker.draft_loader import SnapshotDraftLoader
+from moallem.worker.actor import ActorContextResolver
 from moallem.worker.handlers.publish_quiz import (
     TASK_TYPE_CREATE_QUIZ,
+    PublicationGateway,
     PublishQuizHandler,
 )
 from moallem.worker.queue import TaskHandlerRegistry
@@ -26,35 +32,38 @@ log = logging.getLogger("moallem.worker.composition")
 
 def build_handler_registry(
     *,
-    # Required for real publish path
-    publications: Any | None = None,
-    connections: Any | None = None,
-    vault: Any | None = None,
-    transport: Any | None = None,
-    resolver: Any | None = None,
-    # Optional overrides
+    publications: PublicationGateway | None = None,
+    connections: ConnectionRepository | None = None,
+    vault: SecretVault | None = None,
+    transport: MoodleTransport | None = None,
+    resolver: Resolver | None = None,
+    memberships: MembershipRepository | None = None,
     permission_policy: PermissionPolicy | None = None,
     write_adapter: MoodleWriteAdapter | None = None,
     enable_fake_write: bool = False,
     enable_teacher_policy: bool = False,
-    private_profile: Any | None = None,
+    private_profile: PrivateNetworkProfile | None = None,
 ) -> TaskHandlerRegistry:
     """Compose handlers for the worker process.
 
     Defaults:
-    - No CREATE_QUIZ handler unless publications + moodle deps are provided.
-    - Write adapter = DenyAllWriteAdapter (or FakeWriteAdapter if enable_fake_write).
-    - Permission policy = DenyAllPolicy (or TeacherMVPPolicy if enable_teacher_policy).
+    - No CREATE_QUIZ handler unless publications and every Moodle dependency are provided.
+    - Write adapter = DenyAllWriteAdapter (FakeWriteAdapter only if enable_fake_write).
+    - Permission policy = DenyAllPolicy (TeacherMVPPolicy only if enable_teacher_policy).
     """
     registry = TaskHandlerRegistry()
 
-    can_publish = publications is not None and all(
-        x is not None for x in (connections, vault, transport, resolver)
-    )
-    if not can_publish:
+    if (
+        publications is None
+        or connections is None
+        or vault is None
+        or transport is None
+        or resolver is None
+        or memberships is None
+    ):
         log.warning(
             "worker.publish_handler_not_registered",
-            extra={"reason": "missing publications or moodle dependencies"},
+            extra={"reason": "missing publications, membership or moodle dependencies"},
         )
         return registry
 
@@ -84,14 +93,14 @@ def build_handler_registry(
         write_adapter=adapter,
         private_profile=private_profile,
     )
-    draft_loader = SnapshotDraftLoader(publications)
-
-    handler = PublishQuizHandler(
-        write_service=write_service,
-        publications=publications,
-        draft_loader=draft_loader,
+    registry.register(
+        TASK_TYPE_CREATE_QUIZ,
+        PublishQuizHandler(
+            write_service=write_service,
+            publications=publications,
+            actors=ActorContextResolver(memberships),
+        ),
     )
-    registry.register(TASK_TYPE_CREATE_QUIZ, handler)
     log.info(
         "worker.publish_handler_registered",
         extra={

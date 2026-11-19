@@ -80,9 +80,23 @@ class QuizCreateResult:
     raw_reference: str = ""
 
 
+UNKNOWN_QUESTION_COUNT = -1
+
+
+class MoodlePartialWrite(MoodleUnavailable):
+    """The quiz may exist in Moodle but the write did not finish (e.g. adding questions).
+
+    Callers must treat the outcome as UNKNOWN and reconcile; never retry blindly.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class QuizVerification:
-    """Read-back proof. Publish is only COMPLETED when verification passes."""
+    """Read-back proof. Publish is only COMPLETED when verification passes.
+
+    ``question_count`` is ``UNKNOWN_QUESTION_COUNT`` when Moodle did not report a count;
+    an unknown count never verifies.
+    """
 
     moodle_quiz_id: int
     name_matches: bool
@@ -92,11 +106,11 @@ class QuizVerification:
 
     @property
     def is_verified(self) -> bool:
-        return (
-            self.name_matches
-            and self.course_id_matches
-            and self.question_count >= 0  # exact expected count checked by caller
-        )
+        return self.name_matches and self.course_id_matches and self.question_count >= 0
+
+    def matches(self, expected_question_count: int) -> bool:
+        """True only if the read-back proves name, course and the exact question count."""
+        return self.is_verified and self.question_count == expected_question_count
 
 
 # ---------------------------------------------------------------------------

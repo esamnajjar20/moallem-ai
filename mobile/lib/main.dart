@@ -5,13 +5,14 @@ import 'app.dart';
 import 'core/app_config.dart';
 import 'core/providers.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final config = AppConfig.fromEnvironment();
-  runApp(
-    ProviderScope(
-      overrides: [appConfigProvider.overrideWithValue(config)],
-      child: const MoallemApp(),
-    ),
+  final container = ProviderContainer(
+    overrides: [appConfigProvider.overrideWithValue(config)],
   );
+  // Restore a previously validated token (secure storage) before the router starts.
+  final restored = await container.read(authRepositoryProvider).restoreSession();
+  container.read(sessionProvider.notifier).state = restored;
+  runApp(UncontrolledProviderScope(container: container, child: const MoallemApp()));
 }

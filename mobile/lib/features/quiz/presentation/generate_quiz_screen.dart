@@ -39,10 +39,14 @@ class _GenerateQuizScreenState extends ConsumerState<GenerateQuizScreen> {
       _error = null;
     });
     try {
-      final session = ref.read(sessionProvider);
+      final connection = await ref.read(moodleRepositoryProvider).connectionStatus();
+      final connectionId = connection.connectionId;
+      if (!connection.connected || connectionId == null || connectionId.isEmpty) {
+        throw StateError('اربط حساب Moodle أولاً');
+      }
       final draft = await ref.read(quizRepositoryProvider).requestGeneration(
             courseId: widget.course.id,
-            connectionId: session?.membershipId ?? '00000000-0000-4000-8000-000000000001',
+            connectionId: connectionId,
             title: _title.text.trim(),
             questionCount: _count,
             questionTypes: _types.toList(),
